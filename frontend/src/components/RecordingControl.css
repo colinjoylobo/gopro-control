@@ -1,0 +1,266 @@
+.recording-control {
+  max-width: 100%;
+}
+
+.recording-status {
+  margin-top: 1.5rem;
+}
+
+.status-display {
+  text-align: center;
+  margin-bottom: 2rem;
+}
+
+.recording-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 1.5rem 3rem;
+  background: #1a1a1a;
+  border: 3px solid #3a3a3a;
+  border-radius: 16px;
+  margin-bottom: 1.5rem;
+  transition: all 0.3s ease;
+}
+
+.recording-indicator.active {
+  border-color: #ef4444;
+  background: rgba(239, 68, 68, 0.1);
+  animation: recordingPulse 2s infinite;
+}
+
+@keyframes recordingPulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 15px rgba(239, 68, 68, 0);
+  }
+}
+
+.pulse-dot {
+  width: 16px;
+  height: 16px;
+  background: #ef4444;
+  border-radius: 50%;
+  animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.5;
+    transform: scale(0.8);
+  }
+}
+
+.status-text {
+  font-size: 2rem;
+  font-weight: 700;
+  letter-spacing: 2px;
+  color: white;
+}
+
+.recording-timer {
+  font-size: 3rem;
+  font-weight: 700;
+  font-family: 'Courier New', monospace;
+  color: #ef4444;
+  text-align: center;
+  padding: 1rem;
+  background: rgba(239, 68, 68, 0.1);
+  border-radius: 12px;
+  border: 2px solid #ef4444;
+}
+
+.camera-status-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.5rem;
+  margin-top: 1.5rem;
+}
+
+.stat-card {
+  background: #1a1a1a;
+  padding: 1.5rem;
+  border-radius: 12px;
+  text-align: center;
+  border: 2px solid #3a3a3a;
+  transition: all 0.3s ease;
+}
+
+.stat-card:hover {
+  border-color: #667eea;
+  transform: translateY(-2px);
+}
+
+.stat-value {
+  font-size: 3rem;
+  font-weight: 700;
+  color: #667eea;
+  margin-bottom: 0.5rem;
+}
+
+.stat-value.recording {
+  color: #ef4444;
+}
+
+.stat-label {
+  color: #888;
+  font-size: 0.875rem;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.recording-controls {
+  display: flex;
+  gap: 1.5rem;
+  justify-content: center;
+  margin-top: 1.5rem;
+}
+
+.btn-record,
+.btn-stop {
+  padding: 1.5rem 3rem;
+  font-size: 1.25rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 250px;
+  justify-content: center;
+}
+
+.btn-record {
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+}
+
+.btn-record.recording {
+  background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+  animation: recordingButton 2s infinite;
+}
+
+@keyframes recordingButton {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.8;
+  }
+}
+
+.btn-stop {
+  background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+}
+
+.record-icon,
+.stop-icon {
+  font-size: 1.5rem;
+}
+
+.spinner {
+  width: 20px;
+  height: 20px;
+  border: 3px solid rgba(255, 255, 255, 0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.cameras-list {
+  display: grid;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.camera-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 1.5rem;
+  background: #1a1a1a;
+  border: 2px solid #3a3a3a;
+  border-radius: 8px;
+  transition: all 0.3s ease;
+}
+
+.camera-item:hover {
+  border-color: #667eea;
+}
+
+.camera-item-info {
+  flex: 1;
+}
+
+.camera-name {
+  font-weight: 600;
+  color: white;
+  font-size: 1.1rem;
+  margin-bottom: 0.25rem;
+}
+
+.camera-serial {
+  color: #888;
+  font-size: 0.875rem;
+}
+
+.camera-item-status {
+  padding: 0.5rem 1rem;
+  border-radius: 20px;
+  background: rgba(107, 114, 128, 0.2);
+  color: #6b7280;
+  font-weight: 600;
+  font-size: 0.875rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.camera-item-status.recording {
+  background: rgba(239, 68, 68, 0.2);
+  color: #ef4444;
+  border: 1px solid #ef4444;
+}
+
+.recording-dot {
+  width: 8px;
+  height: 8px;
+  background: #ef4444;
+  border-radius: 50%;
+  animation: pulse 1.5s infinite;
+}
+
+.instructions-list {
+  margin: 1rem 0;
+  padding-left: 1.5rem;
+  color: #aaa;
+  line-height: 1.8;
+}
+
+.instructions-list li {
+  margin-bottom: 0.75rem;
+}
+
+@media (max-width: 768px) {
+  .camera-status-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .recording-controls {
+    flex-direction: column;
+  }
+
+  .btn-record,
+  .btn-stop {
+    width: 100%;
+  }
+}

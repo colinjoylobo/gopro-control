@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+open-gopro
+httpx
+requests
+pydantic
+python-multipart
+websockets
