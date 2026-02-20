@@ -797,11 +797,14 @@ async def get_media_list():
 
 
 @app.post("/api/download/{serial}")
-async def download_from_camera(serial: str):
-    """Download all files from a camera"""
+async def download_from_camera(serial: str, max_files: Optional[int] = None):
+    """Download files from a camera (optionally limit to last N files)"""
     try:
         logger.info("=" * 60)
-        logger.info(f"📥 DOWNLOAD REQUEST for camera {serial}")
+        if max_files:
+            logger.info(f"📥 DOWNLOAD REQUEST for camera {serial} (last {max_files} files)")
+        else:
+            logger.info(f"📥 DOWNLOAD REQUEST for camera {serial} (all files)")
 
         camera = camera_manager.get_camera(serial)
         if not camera:
@@ -881,12 +884,16 @@ async def download_from_camera(serial: str):
 
         # Run download in thread pool
         logger.info("Step 3: Starting file download...")
-        downloaded_files = await loop.run_in_executor(
-            None,
+
+        # Use partial to pass max_files parameter
+        from functools import partial
+        download_func = partial(
             download_manager.download_all_from_camera,
             serial,
-            progress_callback
+            progress_callback,
+            max_files
         )
+        downloaded_files = await loop.run_in_executor(None, download_func)
 
         logger.info("=" * 60)
         logger.info(f"✅ Download complete!")

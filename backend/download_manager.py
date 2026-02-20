@@ -121,11 +121,13 @@ class DownloadManager:
     def download_all_from_camera(
         self,
         serial: str,
-        progress_callback: Optional[Callable[[str, int, int, int], None]] = None
+        progress_callback: Optional[Callable[[str, int, int, int], None]] = None,
+        max_files: Optional[int] = None
     ) -> List[Path]:
         """
-        Download all files from camera
+        Download files from camera
         progress_callback(filename, current_file_idx, total_files, percent)
+        max_files: Optional - Download only the last N files (None = download all)
         """
         downloaded_files = []
 
@@ -141,8 +143,17 @@ class DownloadManager:
                 logger.warning("⚠️  No media files found on camera")
                 return []
 
-            total_files = len(media_list)
-            logger.info(f"✓ Found {total_files} files to download (sorted newest first)")
+            # Limit to last N files if specified
+            if max_files and max_files > 0:
+                total_available = len(media_list)
+                media_list = media_list[:max_files]  # Already sorted newest first
+                total_files = len(media_list)
+                logger.info(f"✓ Found {total_available} files on camera")
+                logger.info(f"📊 Downloading last {total_files} file(s) (newest first)")
+            else:
+                total_files = len(media_list)
+                logger.info(f"✓ Found {total_files} files to download (sorted newest first)")
+
             logger.info("=" * 60)
 
             # Create folder name with today's date and camera name

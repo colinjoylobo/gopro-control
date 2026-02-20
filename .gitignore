@@ -46,6 +46,7 @@ package-lock.json
 
 # Backend specific
 backend/cohn_db.json
+backend/gopro_downloads/
 
 # Build outputs
 backend/build/

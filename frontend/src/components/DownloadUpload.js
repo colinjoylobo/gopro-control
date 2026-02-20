@@ -16,6 +16,8 @@ function DownloadUpload({ cameras, apiUrl }) {
   const [ws, setWs] = useState(null);
   const [currentWiFi, setCurrentWiFi] = useState(null);
   const [uploadedZips, setUploadedZips] = useState([]); // Store all uploaded ZIP URLs
+  const [maxFiles, setMaxFiles] = useState(''); // Number of files to download (empty = all files)
+  const [bulkDownloadProgress, setBulkDownloadProgress] = useState(null); // { currentCamera: 2, totalCameras: 4, cameraName: "GoPro 2152" }
 
   const connectedCameras = cameras.filter(cam => cam.connected);
 
@@ -233,8 +235,12 @@ function DownloadUpload({ cameras, apiUrl }) {
 
     try {
       console.log(`Starting download from camera ${serial}`, camera);
+      if (maxFiles) {
+        console.log(`Limiting download to last ${maxFiles} files`);
+      }
 
       const response = await axios.post(`${apiUrl}/api/download/${serial}`, null, {
+        params: maxFiles ? { max_files: parseInt(maxFiles) } : {},
         timeout: 300000 // 5 minute timeout for large files
       });
 
@@ -273,6 +279,126 @@ function DownloadUpload({ cameras, apiUrl }) {
     } finally {
       setDownloading(false);
     }
+  };
+
+  const handleDownloadFromAllCameras = async () => {
+    if (connectedCameras.length === 0) {
+      setMessage({ type: 'error', text: 'No cameras connected! Connect cameras first.' });
+      setTimeout(() => setMessage(null), 3000);
+      return;
+    }
+
+    setDownloading(true);
+    const totalCameras = connectedCameras.length;
+    let successCount = 0;
+    let failCount = 0;
+
+    setMessage({
+      type: 'info',
+      text: `Starting sequential download from ${totalCameras} camera(s)...`
+    });
+
+    // Download from each camera sequentially
+    for (let i = 0; i < connectedCameras.length; i++) {
+      const camera = connectedCameras[i];
+      const currentCameraNum = i + 1;
+      const cameraName = camera.name || `GoPro ${camera.serial}`;
+
+      // Update bulk download progress
+      setBulkDownloadProgress({
+        currentCamera: currentCameraNum,
+        totalCameras: totalCameras,
+        cameraName: cameraName,
+        serial: camera.serial
+      });
+
+      // Set individual camera progress
+      setDownloadProgress(prev => ({
+        ...prev,
+        [camera.serial]: { filename: 'Initializing...', current: 0, total: 0, percent: 0 }
+      }));
+
+      setMessage({
+        type: 'info',
+        text: `📥 [${currentCameraNum}/${totalCameras}] Connecting to ${cameraName} WiFi...`
+      });
+
+      try {
+        console.log(`[${currentCameraNum}/${totalCameras}] Starting download from camera ${camera.serial}`);
+        if (maxFiles) {
+          console.log(`Limiting download to last ${maxFiles} files`);
+        }
+
+        const response = await axios.post(`${apiUrl}/api/download/${camera.serial}`, null, {
+          params: maxFiles ? { max_files: parseInt(maxFiles) } : {},
+          timeout: 300000 // 5 minute timeout for large files
+        });
+
+        console.log(`[${currentCameraNum}/${totalCameras}] Download response:`, response.data);
+
+        setMessage({
+          type: 'success',
+          text: `✅ [${currentCameraNum}/${totalCameras}] Downloaded ${response.data.files_count} file(s) from ${cameraName}!`
+        });
+
+        successCount++;
+
+        // Clear individual camera progress
+        setDownloadProgress(prev => {
+          const newProgress = { ...prev };
+          delete newProgress[camera.serial];
+          return newProgress;
+        });
+
+        // Wait 2 seconds before moving to next camera
+        if (i < connectedCameras.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+
+      } catch (error) {
+        console.error(`[${currentCameraNum}/${totalCameras}] Download error:`, error);
+        failCount++;
+
+        // Clear individual camera progress
+        setDownloadProgress(prev => {
+          const newProgress = { ...prev };
+          delete newProgress[camera.serial];
+          return newProgress;
+        });
+
+        setMessage({
+          type: 'error',
+          text: `❌ [${currentCameraNum}/${totalCameras}] Failed to download from ${cameraName}: ${error.response?.data?.detail || error.message}. Continuing to next camera...`
+        });
+
+        // Wait 2 seconds before moving to next camera even on error
+        if (i < connectedCameras.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+      }
+    }
+
+    // Clear bulk download progress
+    setBulkDownloadProgress(null);
+    setDownloading(false);
+
+    // Refresh downloaded files list
+    fetchDownloadedFiles();
+
+    // Show final results
+    if (failCount === 0) {
+      setMessage({
+        type: 'success',
+        text: `🎉 Successfully downloaded from all ${successCount} camera(s)!`
+      });
+    } else {
+      setMessage({
+        type: 'warning',
+        text: `⚠️ Download complete: ${successCount} succeeded, ${failCount} failed out of ${totalCameras} cameras.`
+      });
+    }
+
+    setTimeout(() => setMessage(null), 8000);
   };
 
   const handleTestS3Backend = async () => {
@@ -707,6 +833,30 @@ function DownloadUpload({ cameras, apiUrl }) {
               </ol>
             </div>
 
+            {/* Download Limit Input */}
+            <div className="form-group" style={{ marginBottom: '1rem' }}>
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '500' }}>
+                Number of Files to Download (Optional)
+              </label>
+              <input
+                type="number"
+                min="1"
+                value={maxFiles}
+                onChange={(e) => setMaxFiles(e.target.value)}
+                placeholder="Leave empty to download all files"
+                style={{
+                  width: '100%',
+                  padding: '0.5rem',
+                  borderRadius: '6px',
+                  border: '1px solid #ddd',
+                  fontSize: '1rem'
+                }}
+              />
+              <small style={{ display: 'block', marginTop: '0.25rem', color: '#666' }}>
+                Leave empty to download all files, or enter a number (e.g., 5) to download only the last N files (newest first)
+              </small>
+            </div>
+
             <div className="button-group">
               <button
                 className="btn btn-secondary"
@@ -714,6 +864,78 @@ function DownloadUpload({ cameras, apiUrl }) {
               >
                 Step 1: Enable WiFi on All Cameras
               </button>
+            </div>
+
+            {/* Bulk Download Progress */}
+            {bulkDownloadProgress && (
+              <div className="card" style={{ background: '#e7f3ff', border: '2px solid #667eea', marginTop: '1rem' }}>
+                <h3 style={{ color: '#667eea', marginBottom: '1rem' }}>
+                  📥 Bulk Download Progress
+                </h3>
+                <div style={{ marginBottom: '0.5rem', fontSize: '1.1rem', fontWeight: 'bold', color: '#333' }}>
+                  Camera {bulkDownloadProgress.currentCamera} of {bulkDownloadProgress.totalCameras}: {bulkDownloadProgress.cameraName}
+                </div>
+                <div className="progress-bar" style={{ marginBottom: '0.5rem' }}>
+                  <div
+                    className="progress-fill"
+                    style={{
+                      width: `${(bulkDownloadProgress.currentCamera / bulkDownloadProgress.totalCameras) * 100}%`,
+                      background: '#667eea'
+                    }}
+                  ></div>
+                </div>
+                {downloadProgress[bulkDownloadProgress.serial] && (
+                  <div style={{ marginTop: '1rem', padding: '0.75rem', background: 'white', borderRadius: '6px' }}>
+                    <div style={{ marginBottom: '0.5rem', color: '#666' }}>
+                      Downloading: {downloadProgress[bulkDownloadProgress.serial].filename}
+                    </div>
+                    <div style={{ marginBottom: '0.5rem', color: '#666' }}>
+                      File {downloadProgress[bulkDownloadProgress.serial].current} of {downloadProgress[bulkDownloadProgress.serial].total}
+                    </div>
+                    <div className="progress-bar">
+                      <div
+                        className="progress-fill"
+                        style={{ width: `${downloadProgress[bulkDownloadProgress.serial].percent}%` }}
+                      ></div>
+                    </div>
+                    <div style={{ textAlign: 'center', marginTop: '0.25rem', fontWeight: 'bold' }}>
+                      {downloadProgress[bulkDownloadProgress.serial].percent}%
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Download from All Cameras Button */}
+            <div style={{ marginTop: '1rem', marginBottom: '1rem' }}>
+              <button
+                className="btn btn-primary"
+                onClick={handleDownloadFromAllCameras}
+                disabled={downloading}
+                style={{
+                  width: '100%',
+                  padding: '1rem',
+                  fontSize: '1.1rem',
+                  fontWeight: 'bold',
+                  background: downloading ? '#ccc' : '#667eea'
+                }}
+              >
+                {downloading ? (
+                  <>
+                    <span className="spinner-small"></span>
+                    Downloading...
+                  </>
+                ) : (
+                  `Step 2: Download from All ${connectedCameras.length} Cameras`
+                )}
+              </button>
+              <small style={{ display: 'block', marginTop: '0.5rem', color: '#666', textAlign: 'center' }}>
+                This will download {maxFiles ? `last ${maxFiles} files` : 'all files'} from each camera sequentially
+              </small>
+            </div>
+
+            <div style={{ margin: '1rem 0', padding: '0.75rem', background: '#f8f9fa', borderRadius: '6px', textAlign: 'center', color: '#666' }}>
+              <strong>OR</strong> download from individual cameras below
             </div>
 
             <div className="cameras-download-grid">
@@ -748,7 +970,7 @@ function DownloadUpload({ cameras, apiUrl }) {
                       onClick={() => handleDownloadFromCamera(camera.serial)}
                       disabled={downloading}
                     >
-                      Step 2: Download All Files
+                      Download {maxFiles ? `Last ${maxFiles}` : 'All'} Files
                     </button>
                   )}
                 </div>
@@ -968,12 +1190,14 @@ function DownloadUpload({ cameras, apiUrl }) {
         <ol className="instructions-list">
           <li><strong>Stop all recordings</strong> - Go to Recording Control tab and stop recording</li>
           <li><strong>Enable WiFi</strong> - Click "Step 1: Enable WiFi on All Cameras" and wait 20 seconds</li>
-          <li><strong>Download files</strong> - Click "Step 2: Download All Files" for each camera
+          <li><strong>Download files</strong> - Optionally specify number of files to download (e.g., 5 for last 5 files), then:
             <ul style={{ marginTop: '0.5rem', color: '#888' }}>
-              <li>Your Mac will automatically disconnect from current WiFi</li>
-              <li>Connect to camera's WiFi network (e.g., GP25471874)</li>
-              <li>Download all files in newest-first order</li>
-              <li>You'll see real-time progress for each file</li>
+              <li><strong>Option A:</strong> Click "Step 2: Download from All Cameras" to download from all cameras sequentially (recommended)</li>
+              <li><strong>Option B:</strong> Click "Download Files" for individual cameras if you only need specific cameras</li>
+              <li>Your Mac will automatically connect to each camera's WiFi network</li>
+              <li>Files are downloaded in newest-first order (all files or limited to last N files)</li>
+              <li>You'll see real-time progress showing which camera and which file is downloading</li>
+              <li>If one camera fails, the system continues to the next camera</li>
             </ul>
           </li>
           <li><strong>Upload to S3</strong> - Configure S3 settings at the top, then:
