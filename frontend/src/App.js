@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import CameraManagement from './components/CameraManagement';
 import RecordingControl from './components/RecordingControl';
@@ -13,16 +13,19 @@ function App() {
   const [cameras, setCameras] = useState([]);
   const [ws, setWs] = useState(null);
   const [backendStatus, setBackendStatus] = useState('connecting');
+  const [downloadWsMessage, setDownloadWsMessage] = useState(null);
+  const downloadWsMsgCounter = useRef(0);
+  const [activeShoot, setActiveShoot] = useState(null);
 
   // Connect to WebSocket for real-time updates
   useEffect(() => {
     connectWebSocket();
     checkBackendStatus();
 
-    // Poll for camera updates every 200ms for instant UI updates
+    // Poll for camera updates (WebSocket handles instant updates)
     const pollInterval = setInterval(() => {
       fetchCameras();
-    }, 200);
+    }, 5000);
 
     return () => {
       if (ws) {
@@ -96,8 +99,42 @@ function App() {
           )
         );
         break;
+      case 'battery_update':
+        // Update battery levels on all cameras
+        if (data.levels) {
+          setCameras(prevCameras =>
+            prevCameras.map(cam => {
+              const level = data.levels[cam.serial];
+              if (level !== null && level !== undefined) {
+                return { ...cam, battery_level: level };
+              }
+              return cam;
+            })
+          );
+        }
+        break;
+      case 'download_status':
+      case 'download_progress':
+      case 'download_complete':
+      case 'download_error':
+        downloadWsMsgCounter.current += 1;
+        setDownloadWsMessage({ ...data, _seq: downloadWsMsgCounter.current });
+        break;
+      case 'shoot_created':
+      case 'shoot_activated':
+        setActiveShoot(data.shoot);
+        break;
+      case 'shoot_deactivated':
+        setActiveShoot(null);
+        break;
+      case 'shoot_deleted':
+        if (activeShoot && activeShoot.id === data.shoot_id) setActiveShoot(null);
+        break;
+      case 'take_started':
+      case 'take_stopped':
+        fetchActiveShoot();
+        break;
       default:
-        console.log('Unknown WebSocket message type:', data.type);
         break;
     }
   };
@@ -108,6 +145,7 @@ function App() {
       if (response.data.status === 'healthy') {
         setBackendStatus('connected');
         await fetchCameras();
+        fetchActiveShoot();
 
         // Check for existing BLE connections in background (don't await)
         checkExistingConnections();
@@ -148,6 +186,15 @@ function App() {
     } catch (error) {
       console.error('Failed to fetch cameras:', error);
       return [];
+    }
+  };
+
+  const fetchActiveShoot = async () => {
+    try {
+      const response = await axios.get(`${API_URL}/api/shoots/active`);
+      setActiveShoot(response.data.shoot);
+    } catch (error) {
+      console.error('Failed to fetch active shoot:', error);
     }
   };
 
@@ -203,6 +250,8 @@ function App() {
             cameras={cameras}
             onCamerasUpdate={fetchCameras}
             apiUrl={API_URL}
+            activeShoot={activeShoot}
+            onShootUpdate={fetchActiveShoot}
           />
         )}
         {activeTab === 'preview' && (
@@ -215,6 +264,8 @@ function App() {
           <DownloadUpload
             cameras={cameras}
             apiUrl={API_URL}
+            downloadWsMessage={downloadWsMessage}
+            activeShoot={activeShoot}
           />
         )}
       </div>

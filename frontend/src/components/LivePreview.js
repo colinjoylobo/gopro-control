@@ -25,12 +25,12 @@ function LivePreview({ cameras, apiUrl }) {
     const checkWifi = async () => {
       try {
         const response = await axios.get(`${apiUrl}/api/wifi/current`);
-        setCurrentWifi(response.data.ssid);
+        // Use display_name which works on macOS 26+ (where SSID is hidden)
+        setCurrentWifi(response.data.display_name || response.data.ssid);
 
-        // Check if connected to selected camera's WiFi
+        // Check if connected to GoPro WiFi (IP-based detection for macOS 26+)
         if (selectedCamera) {
-          const camera = cameras.find(c => c.serial === selectedCamera);
-          if (camera && response.data.ssid === camera.wifi_ssid) {
+          if (response.data.on_gopro) {
             setWifiConnected(true);
           } else {
             setWifiConnected(false);
@@ -47,9 +47,22 @@ function LivePreview({ cameras, apiUrl }) {
     return () => clearInterval(interval);
   }, [apiUrl, selectedCamera, cameras]);
 
-  // Initialize HLS player when stream URL is available and WiFi is connected
+  // Start the camera stream and initialize HLS player when WiFi is connected
   useEffect(() => {
     if (streamUrl && wifiConnected && videoRef.current) {
+      // Must call stream/start on the camera over HTTP before HLS will work
+      // Route through backend to avoid CORS issues
+      const startStream = async () => {
+        try {
+          console.log('Starting camera stream via backend proxy...');
+          await axios.post(`${apiUrl}/api/preview/stream-start`, null, { timeout: 15000 });
+          console.log('Camera stream started successfully');
+        } catch (err) {
+          console.warn('Stream start request failed (may already be running):', err.message);
+        }
+      };
+      startStream();
+
       if (Hls.isSupported()) {
         // Cleanup previous instance
         if (hlsRef.current) {
@@ -111,7 +124,7 @@ function LivePreview({ cameras, apiUrl }) {
         hlsRef.current = null;
       }
     };
-  }, [streamUrl, wifiConnected]);
+  }, [streamUrl, wifiConnected, apiUrl]);
 
   const handleStartPreview = async () => {
     if (!selectedCamera) {
@@ -197,24 +210,37 @@ function LivePreview({ cameras, apiUrl }) {
     const camera = cameras.find(c => c.serial === selectedCamera);
     if (!camera) return;
 
-    setMessage({ type: 'info', text: `Connecting to ${camera.wifi_ssid}...` });
+    // Step 1: Enable WiFi AP on camera via BLE
+    setMessage({ type: 'info', text: `Enabling WiFi on ${camera.name || `GoPro ${camera.serial}`}...` });
 
     try {
-      const response = await axios.post(`${apiUrl}/api/wifi/connect`, {
-        ssid: camera.wifi_ssid,
-        password: camera.wifi_password
-      });
+      // Enable WiFi AP via BLE first (camera must broadcast before Mac can connect)
+      if (camera.connected) {
+        await axios.post(`${apiUrl}/api/wifi/enable-all`, null, { timeout: 30000 });
+        // Wait for WiFi AP to start broadcasting
+        setMessage({ type: 'info', text: `WiFi AP enabled, waiting for broadcast...` });
+        await new Promise(resolve => setTimeout(resolve, 5000));
+      }
+
+      // Step 2: Connect Mac to camera WiFi using server-side credentials
+      setMessage({ type: 'info', text: `Connecting to ${camera.wifi_ssid}...` });
+
+      const response = await axios.post(
+        `${apiUrl}/api/wifi/connect-camera/${camera.serial}`,
+        null,
+        { timeout: 60000 }
+      );
 
       if (response.data.success) {
         setMessage({ type: 'success', text: `Connected to ${camera.wifi_ssid}!` });
         setWifiConnected(true);
       } else {
-        setMessage({ type: 'error', text: 'WiFi connection failed' });
+        setMessage({ type: 'error', text: 'WiFi connection failed. Try again or connect manually via macOS WiFi settings.' });
       }
-      setTimeout(() => setMessage(null), 3000);
+      setTimeout(() => setMessage(null), 5000);
     } catch (error) {
-      setMessage({ type: 'error', text: `WiFi connection failed: ${error.message}` });
-      setTimeout(() => setMessage(null), 3000);
+      setMessage({ type: 'error', text: `WiFi connection failed: ${error.response?.data?.detail || error.message}` });
+      setTimeout(() => setMessage(null), 5000);
     }
   };
 
@@ -303,7 +329,7 @@ function LivePreview({ cameras, apiUrl }) {
                           <strong>SSID:</strong> {selectedCameraObj.wifi_ssid}
                         </div>
                         <div className="wifi-detail-item">
-                          <strong>Password:</strong> {selectedCameraObj.wifi_password}
+                          <strong>Password:</strong> (stored on server)
                         </div>
                       </div>
                       <button

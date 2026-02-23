@@ -6,8 +6,20 @@ function CameraManagement({ cameras, onCamerasUpdate, apiUrl }) {
   const [showAddForm, setShowAddForm] = useState(false);
   const [discovering, setDiscovering] = useState(false);
   const [connecting, setConnecting] = useState(false);
+  const [connectingSerial, setConnectingSerial] = useState(null);
   const [message, setMessage] = useState(null);
   const [discoveredCameras, setDiscoveredCameras] = useState([]);
+  const [eraseModal, setEraseModal] = useState(null); // { serial, cameraName, loading, summary }
+  const [eraseConfirmText, setEraseConfirmText] = useState('');
+  const [erasing, setErasing] = useState(false);
+
+  // Battery comes from camera props (updated via App.js WebSocket + polling)
+  const getBatteryColor = (level) => {
+    if (level === null || level === undefined) return '#999';
+    if (level > 50) return '#28a745';
+    if (level > 20) return '#ffc107';
+    return '#dc3545';
+  };
 
   const [newCamera, setNewCamera] = useState({
     serial: '',
@@ -97,6 +109,34 @@ function CameraManagement({ cameras, onCamerasUpdate, apiUrl }) {
     setDiscoveredCameras([]);
   };
 
+  const handleConnectSingle = async (serial) => {
+    setConnectingSerial(serial);
+    setMessage({ type: 'info', text: `Connecting to ${serial} via BLE...` });
+
+    try {
+      const response = await axios.post(`${apiUrl}/api/cameras/connect/${serial}`, null, {
+        timeout: 90000
+      });
+
+      if (response.data.success) {
+        setMessage({ type: 'success', text: `Camera ${serial} connected!` });
+      } else {
+        setMessage({ type: 'error', text: `Camera ${serial} failed to connect. Check if it's powered on.` });
+      }
+
+      await onCamerasUpdate();
+      setTimeout(() => setMessage(null), 5000);
+    } catch (error) {
+      setMessage({
+        type: 'error',
+        text: `Connect ${serial} failed: ${error.response?.data?.detail || error.message}`
+      });
+      setTimeout(() => setMessage(null), 5000);
+    } finally {
+      setConnectingSerial(null);
+    }
+  };
+
   const handleConnectAll = async () => {
     if (cameras.length === 0) {
       setMessage({ type: 'error', text: 'No cameras to connect! Add cameras first.' });
@@ -128,7 +168,7 @@ function CameraManagement({ cameras, onCamerasUpdate, apiUrl }) {
       console.log('Attempting to connect to cameras:', cameras.map(c => c.serial));
 
       const response = await axios.post(`${apiUrl}/api/cameras/connect-all`, null, {
-        timeout: 120000 // 2 minute timeout
+        timeout: 300000 // 5 minute timeout
       });
 
       const results = response.data.results;
@@ -172,6 +212,44 @@ function CameraManagement({ cameras, onCamerasUpdate, apiUrl }) {
       setTimeout(() => setMessage(null), 8000);
     } finally {
       setConnecting(false);
+    }
+  };
+
+  const handleEraseSD = async (serial, cameraName) => {
+    setEraseModal({ serial, cameraName, loading: true, summary: null });
+    setEraseConfirmText('');
+
+    try {
+      const response = await axios.get(`${apiUrl}/api/cameras/${serial}/media-summary`, {
+        timeout: 60000
+      });
+      setEraseModal({ serial, cameraName, loading: false, summary: response.data });
+    } catch (error) {
+      const errorMsg = error.response?.data?.detail || 'Failed to get media summary';
+      setMessage({ type: 'error', text: errorMsg });
+      setEraseModal(null);
+      setTimeout(() => setMessage(null), 5000);
+    }
+  };
+
+  const handleConfirmErase = async () => {
+    if (!eraseModal) return;
+
+    setErasing(true);
+    try {
+      await axios.post(`${apiUrl}/api/cameras/${eraseModal.serial}/erase-sd`, null, {
+        timeout: 120000
+      });
+      setMessage({ type: 'success', text: `Successfully erased all media from camera ${eraseModal.serial}` });
+      setEraseModal(null);
+      setEraseConfirmText('');
+      setTimeout(() => setMessage(null), 5000);
+    } catch (error) {
+      const errorMsg = error.response?.data?.detail || 'Failed to erase SD card';
+      setMessage({ type: 'error', text: errorMsg });
+      setTimeout(() => setMessage(null), 5000);
+    } finally {
+      setErasing(false);
     }
   };
 
@@ -319,8 +397,23 @@ function CameraManagement({ cameras, onCamerasUpdate, apiUrl }) {
                     <h3>{camera.name || `GoPro ${camera.serial}`}</h3>
                     <p className="camera-serial">Serial: {camera.serial}</p>
                   </div>
-                  <div className={`connection-badge ${camera.connected ? 'connected' : 'disconnected'}`}>
-                    {camera.connected ? 'Connected' : 'Disconnected'}
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.25rem' }}>
+                    <div className={`connection-badge ${camera.connected ? 'connected' : 'disconnected'}`}>
+                      {camera.connected ? 'Connected' : 'Disconnected'}
+                    </div>
+                    {camera.battery_level !== null && camera.battery_level !== undefined && (
+                      <div style={{
+                        padding: '0.2rem 0.5rem',
+                        borderRadius: '12px',
+                        fontSize: '0.8rem',
+                        fontWeight: 'bold',
+                        background: getBatteryColor(camera.battery_level) + '20',
+                        color: getBatteryColor(camera.battery_level),
+                        border: `1px solid ${getBatteryColor(camera.battery_level)}40`
+                      }}>
+                        {camera.battery_level > 20 ? '🔋' : '🪫'} {camera.battery_level}%
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -337,12 +430,31 @@ function CameraManagement({ cameras, onCamerasUpdate, apiUrl }) {
                   </div>
                 </div>
 
-                <button
-                  className="btn btn-danger btn-sm"
-                  onClick={() => handleRemoveCamera(camera.serial)}
-                >
-                  Remove
-                </button>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  {!camera.connected && (
+                    <button
+                      className="btn btn-success btn-sm"
+                      onClick={() => handleConnectSingle(camera.serial)}
+                      disabled={connectingSerial === camera.serial || connecting}
+                    >
+                      {connectingSerial === camera.serial ? 'Connecting...' : 'Connect'}
+                    </button>
+                  )}
+                  <button
+                    className="btn btn-erase btn-sm"
+                    onClick={() => handleEraseSD(camera.serial, camera.name || `GoPro ${camera.serial}`)}
+                    disabled={!camera.connected || camera.recording}
+                    title={!camera.connected ? 'Camera must be connected' : camera.recording ? 'Stop recording first' : 'Erase all files on SD card'}
+                  >
+                    Erase SD
+                  </button>
+                  <button
+                    className="btn btn-danger btn-sm"
+                    onClick={() => handleRemoveCamera(camera.serial)}
+                  >
+                    Remove
+                  </button>
+                </div>
               </div>
             ))}
           </div>
@@ -376,6 +488,72 @@ function CameraManagement({ cameras, onCamerasUpdate, apiUrl }) {
             >
               Disconnect All
             </button>
+          </div>
+        </div>
+      )}
+      {eraseModal && (
+        <div className="erase-modal-overlay" onClick={() => { if (!erasing) { setEraseModal(null); setEraseConfirmText(''); } }}>
+          <div className="erase-modal" onClick={(e) => e.stopPropagation()}>
+            <h2>Erase SD Card</h2>
+            <p style={{ color: '#aaa', marginBottom: '1rem' }}>
+              Camera: <strong style={{ color: 'white' }}>{eraseModal.cameraName}</strong> ({eraseModal.serial})
+            </p>
+
+            {eraseModal.loading ? (
+              <div style={{ textAlign: 'center', padding: '2rem' }}>
+                <div className="erase-spinner"></div>
+                <p style={{ color: '#aaa', marginTop: '1rem' }}>Connecting to camera and fetching media info...</p>
+              </div>
+            ) : eraseModal.summary ? (
+              <>
+                <div className="erase-modal-stats">
+                  <div className="erase-stat">
+                    <span className="erase-stat-value">{eraseModal.summary.file_count}</span>
+                    <span className="erase-stat-label">Files</span>
+                  </div>
+                  <div className="erase-stat">
+                    <span className="erase-stat-value">{eraseModal.summary.total_size_human}</span>
+                    <span className="erase-stat-label">Total Size</span>
+                  </div>
+                </div>
+
+                <div className="erase-modal-warning">
+                  This will permanently delete ALL files on the SD card. This cannot be undone.
+                </div>
+
+                <div style={{ marginBottom: '1.5rem' }}>
+                  <label style={{ display: 'block', marginBottom: '0.5rem', color: '#aaa', fontSize: '0.875rem' }}>
+                    Type <strong style={{ color: 'white' }}>{eraseModal.serial}</strong> to confirm:
+                  </label>
+                  <input
+                    type="text"
+                    className="erase-confirm-input"
+                    value={eraseConfirmText}
+                    onChange={(e) => setEraseConfirmText(e.target.value)}
+                    placeholder={`Type ${eraseModal.serial} here`}
+                    disabled={erasing}
+                    autoFocus
+                  />
+                </div>
+
+                <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
+                  <button
+                    className="btn btn-secondary"
+                    onClick={() => { setEraseModal(null); setEraseConfirmText(''); }}
+                    disabled={erasing}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    className="btn btn-erase-confirm"
+                    onClick={handleConfirmErase}
+                    disabled={eraseConfirmText !== eraseModal.serial || erasing}
+                  >
+                    {erasing ? 'Erasing...' : 'Erase All Files'}
+                  </button>
+                </div>
+              </>
+            ) : null}
           </div>
         </div>
       )}

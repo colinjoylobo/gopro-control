@@ -1,6 +1,7 @@
 """
 Download Manager for GoPro Videos
 """
+import re
 import requests
 import httpx
 from pathlib import Path
@@ -11,6 +12,18 @@ import logging
 logger = logging.getLogger(__name__)
 
 GOPRO_IP = "http://10.5.5.9:8080"
+
+
+def format_size(size_bytes: int) -> str:
+    """Convert bytes to human-readable string (e.g., '2.4 GB')"""
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    elif size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    elif size_bytes < 1024 * 1024 * 1024:
+        return f"{size_bytes / (1024 * 1024):.1f} MB"
+    else:
+        return f"{size_bytes / (1024 * 1024 * 1024):.1f} GB"
 
 
 class DownloadManager:
@@ -25,6 +38,11 @@ class DownloadManager:
 
         self.download_dir = download_dir
         self.download_dir.mkdir(parents=True, exist_ok=True)
+
+    @staticmethod
+    def _sanitize_filename(name: str) -> str:
+        """Replace characters that are invalid in filenames with underscores"""
+        return re.sub(r'[<>:"/\\|?*]', '_', name).strip()
 
     def get_media_list(self) -> List[Dict]:
         """Get all media files from GoPro, sorted by date (newest first)"""
@@ -74,6 +92,30 @@ class DownloadManager:
             logger.error(f"Failed to get media list: {e}")
             return []
 
+    def get_media_summary(self) -> Dict:
+        """Get summary of media on camera (count + total size)"""
+        files = self.get_media_list()
+        total_size = sum(f["size"] for f in files)
+        return {
+            "file_count": len(files),
+            "total_size_bytes": total_size,
+            "total_size_human": format_size(total_size)
+        }
+
+    def erase_all_media(self) -> bool:
+        """Delete all media from GoPro SD card. Requires WiFi connection to camera."""
+        try:
+            resp = requests.delete(f"{GOPRO_IP}/gopro/media/all", timeout=30)
+            if resp.status_code == 200:
+                logger.info("Successfully erased all media from camera")
+                return True
+            else:
+                logger.error(f"Erase failed with status {resp.status_code}: {resp.text}")
+                return False
+        except Exception as e:
+            logger.error(f"Erase all media failed: {e}")
+            return False
+
     def download_file(
         self,
         url: str,
@@ -122,7 +164,9 @@ class DownloadManager:
         self,
         serial: str,
         progress_callback: Optional[Callable[[str, int, int, int], None]] = None,
-        max_files: Optional[int] = None
+        max_files: Optional[int] = None,
+        shoot_name: Optional[str] = None,
+        take_number: Optional[int] = None
     ) -> List[Path]:
         """
         Download files from camera
@@ -156,9 +200,13 @@ class DownloadManager:
 
             logger.info("=" * 60)
 
-            # Create folder name with today's date and camera name
-            today = datetime.now().strftime("%Y-%m-%d")
-            folder_name = f"{today}_GoPro{serial}"
+            # Create folder path — use shoot/take hierarchy if provided
+            if shoot_name and take_number is not None:
+                safe_name = self._sanitize_filename(shoot_name)
+                output_base = self.download_dir / safe_name / f"Take_{take_number:02d}" / f"GoPro{serial}"
+            else:
+                today = datetime.now().strftime("%Y-%m-%d")
+                output_base = self.download_dir / f"{today}_GoPro{serial}"
 
             # Download each file
             for idx, media in enumerate(media_list, 1):
@@ -175,8 +223,8 @@ class DownloadManager:
 
                 logger.info(f"[{idx}/{total_files}] {filename} ({size_mb:.1f} MB)")
 
-                # Create output path with date-based organization
-                output_path = self.download_dir / folder_name / filename
+                # Create output path
+                output_path = output_base / filename
 
                 # Progress callback for this file
                 def file_progress(downloaded: int, total: int):
@@ -202,6 +250,38 @@ class DownloadManager:
             logger.error(f"❌ Download all failed: {e}", exc_info=True)
             return downloaded_files
 
+    async def upload_file_to_backend(
+        self,
+        file_path: Path,
+        s3_key: str,
+        backend_url: str,
+        api_key: str,
+        content_type: str = "video/mp4"
+    ) -> Optional[str]:
+        """Upload a file to the backend and return the resulting URL.
+
+        Automatically selects presigned URL upload for files > 32MB,
+        direct multipart upload otherwise.
+        Returns the file URL string on success, or None on failure.
+        """
+        if not backend_url or not backend_url.startswith('http'):
+            raise ValueError(f"Invalid backend URL: {backend_url}")
+
+        file_size = file_path.stat().st_size
+        file_size_mb = file_size / (1024 * 1024)
+        logger.info(f"Uploading: {file_path.name} ({file_size_mb:.1f} MB)")
+
+        if file_size > 32 * 1024 * 1024:
+            logger.info(f"File is > 32MB, using presigned URL method")
+            return await self._upload_via_presigned(
+                file_path, s3_key, backend_url, api_key, content_type
+            )
+        else:
+            logger.info(f"File is <= 32MB, using direct upload")
+            return await self._upload_direct(
+                file_path, s3_key, backend_url, api_key, content_type
+            )
+
     async def upload_to_s3(
         self,
         file_path: Path,
@@ -212,48 +292,27 @@ class DownloadManager:
     ) -> bool:
         """Upload file to S3 via backend (supports large files via presigned URLs)"""
         try:
-            logger.info(f"Uploading: {file_path.name}")
-            logger.info(f"Backend URL: {backend_url}")
-
-            # Validate backend URL
-            if not backend_url or not backend_url.startswith('http'):
-                raise ValueError(f"Invalid backend URL: {backend_url}")
-
             s3_key = f"GoPro_{serial}/{file_path.name}"
-            file_size = file_path.stat().st_size
-            file_size_mb = file_size / (1024 * 1024)
-
-            logger.info(f"File size: {file_size_mb:.1f} MB")
-
-            # Use presigned URL for files > 32MB
-            if file_size > 32 * 1024 * 1024:
-                logger.info(f"File is > 32MB, using presigned URL method")
-                return await self._upload_large_file_presigned(
-                    file_path, s3_key, backend_url, api_key
-                )
-            else:
-                logger.info(f"File is <= 32MB, using direct upload")
-                return await self._upload_small_file_direct(
-                    file_path, s3_key, backend_url, api_key
-                )
-
+            url = await self.upload_file_to_backend(
+                file_path, s3_key, backend_url, api_key
+            )
+            return url is not None
         except Exception as e:
-            logger.error(f"❌ Upload failed: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.error(f"❌ Upload failed: {e}", exc_info=True)
             return False
 
-    async def _upload_small_file_direct(
+    async def _upload_direct(
         self,
         file_path: Path,
         s3_key: str,
         backend_url: str,
-        api_key: str
-    ) -> bool:
-        """Direct upload for files <= 32MB"""
+        api_key: str,
+        content_type: str = "video/mp4"
+    ) -> Optional[str]:
+        """Direct multipart upload for files <= 32MB. Returns URL or None."""
         try:
             with open(file_path, 'rb') as f:
-                files = {"file": (file_path.name, f, "video/mp4")}
+                files = {"file": (file_path.name, f, content_type)}
                 data = {"s3Key": s3_key}
                 headers = {"X-API-Key": api_key}
 
@@ -261,147 +320,150 @@ class DownloadManager:
                     logger.info(f"Sending POST request to {backend_url}")
                     resp = await client.post(backend_url, files=files, data=data, headers=headers)
                     resp.raise_for_status()
+                    result = resp.json()
                     logger.info(f"Response status: {resp.status_code}")
 
+            url = result.get("url") or result.get("fileUrl") or result.get("s3Url")
             logger.info(f"✅ Uploaded: {file_path.name}")
-            return True
+            return url
 
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 413:
                 logger.error(f"❌ File too large for direct upload (413)")
                 logger.info(f"Retrying with presigned URL method...")
-                return await self._upload_large_file_presigned(
-                    file_path, s3_key, backend_url, api_key
+                return await self._upload_via_presigned(
+                    file_path, s3_key, backend_url, api_key, content_type
                 )
             raise
 
-    async def _upload_large_file_presigned(
+    async def _upload_via_presigned(
         self,
         file_path: Path,
         s3_key: str,
         backend_url: str,
         api_key: str,
-        progress_callback: Optional[Callable[[int, int], None]] = None
-    ) -> bool:
-        """Upload large files using presigned URL (bypasses 32MB limit)"""
-        try:
-            # Step 1: Get presigned upload URL
-            presigned_url = backend_url.replace('/upload-file', '/upload-file-presigned')
-            logger.info(f"Step 1: Getting presigned URL from {presigned_url}")
+        content_type: str = "video/mp4"
+    ) -> Optional[str]:
+        """Upload via presigned URL (streaming, no full file read). Returns URL."""
+        # Step 1: Get presigned upload URL
+        presigned_url = backend_url.replace('/upload-file', '/upload-file-presigned')
+        logger.info(f"Step 1: Getting presigned URL from {presigned_url}")
 
-            headers = {"X-API-Key": api_key}
-            data = {
-                "filename": s3_key,
-                "content_type": "video/mp4"
-            }
+        headers = {"X-API-Key": api_key}
+        data = {
+            "filename": s3_key,
+            "content_type": content_type
+        }
 
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.post(presigned_url, headers=headers, data=data)
-                resp.raise_for_status()
-                result = resp.json()
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(presigned_url, headers=headers, data=data)
+            resp.raise_for_status()
+            result = resp.json()
 
-            upload_url = result["upload_url"]
-            file_url = result["file_url"]
-            upload_headers = result["instructions"]["headers"]
-            upload_headers["x-ms-blob-type"] = "BlockBlob"  # Required for Azure
+        upload_url = result["upload_url"]
+        file_url = result["file_url"]
+        upload_headers = result["instructions"]["headers"]
+        upload_headers["x-ms-blob-type"] = "BlockBlob"  # Required for Azure
 
-            logger.info(f"✓ Got presigned URL")
-            logger.info(f"Step 2: Uploading directly to Azure storage...")
+        logger.info(f"✓ Got presigned URL")
+        logger.info(f"Step 2: Uploading directly to Azure storage...")
 
-            # Step 2: Upload directly to Azure blob storage with progress
-            file_size = file_path.stat().st_size
+        # Step 2: Stream file directly (no f.read() into memory)
+        file_size = file_path.stat().st_size
+        upload_headers["Content-Length"] = str(file_size)
 
-            # Read file in chunks and track progress
-            chunk_size = 8 * 1024 * 1024  # 8MB chunks
-            uploaded = 0
-
-            with open(file_path, 'rb') as f:
-                file_data = f.read()
-
-            # Report initial progress
-            if progress_callback:
-                progress_callback(0, file_size)
-
+        with open(file_path, 'rb') as f:
             async with httpx.AsyncClient(timeout=600.0) as client:
-                resp = await client.put(upload_url, headers=upload_headers, content=file_data)
+                resp = await client.put(upload_url, headers=upload_headers, content=f)
                 resp.raise_for_status()
 
-                # Report completion
-                if progress_callback:
-                    progress_callback(file_size, file_size)
-
-            logger.info(f"✅ Uploaded: {file_path.name} (via presigned URL)")
-            logger.info(f"File URL: {file_url}")
-            return True
-
-        except Exception as e:
-            logger.error(f"❌ Presigned upload failed: {e}")
-            raise
+        logger.info(f"✅ Uploaded: {file_path.name} (via presigned URL)")
+        logger.info(f"File URL: {file_url}")
+        return file_url
 
     def get_downloaded_files(self, serial: Optional[str] = None) -> List[Dict]:
-        """Get list of downloaded files (supports both old and new folder formats)"""
+        """Get list of downloaded files (supports legacy flat folders and shoot/take hierarchy)"""
         files = []
+        seen_paths = set()
 
+        def add_file(file_path, serial_num, folder, shoot_name=None, take_number=None, take_folder=None):
+            path_str = str(file_path)
+            if path_str in seen_paths:
+                return
+            seen_paths.add(path_str)
+            entry = {
+                "path": path_str,
+                "name": file_path.name,
+                "size": file_path.stat().st_size,
+                "serial": serial_num,
+                "folder": folder
+            }
+            if shoot_name:
+                entry["shoot_name"] = shoot_name
+            if take_number is not None:
+                entry["take_number"] = take_number
+            if take_folder:
+                entry["take_folder"] = take_folder
+            files.append(entry)
+
+        # Scan shoot/take hierarchy: {download_dir}/{ShootName}/Take_NN/GoProXXXX/
+        for shoot_dir in self.download_dir.iterdir():
+            if not shoot_dir.is_dir():
+                continue
+            for take_dir in shoot_dir.iterdir():
+                if not take_dir.is_dir() or not take_dir.name.startswith("Take_"):
+                    continue
+                take_match = re.match(r'Take_(\d+)', take_dir.name)
+                if not take_match:
+                    continue
+                take_num = int(take_match.group(1))
+                for cam_dir in take_dir.iterdir():
+                    if not cam_dir.is_dir() or not cam_dir.name.startswith("GoPro"):
+                        continue
+                    cam_serial = cam_dir.name.replace("GoPro", "")
+                    if serial and cam_serial != serial:
+                        continue
+                    for file_path in cam_dir.glob("*.*"):
+                        if file_path.is_file():
+                            add_file(
+                                file_path, cam_serial,
+                                f"{shoot_dir.name}/{take_dir.name}/{cam_dir.name}",
+                                shoot_name=shoot_dir.name,
+                                take_number=take_num,
+                                take_folder=take_dir.name
+                            )
+
+        # Scan legacy flat folders
         if serial:
-            # Try new format first (YYYY-MM-DD_GoProXXXX), then fall back to old (GoPro_XXXX)
-            # Search for all folders matching this serial
             for camera_dir in self.download_dir.glob(f"*GoPro{serial}"):
                 if camera_dir.is_dir():
                     for file_path in camera_dir.glob("*.*"):
                         if file_path.is_file():
-                            files.append({
-                                "path": str(file_path),
-                                "name": file_path.name,
-                                "size": file_path.stat().st_size,
-                                "serial": serial,
-                                "folder": camera_dir.name
-                            })
+                            add_file(file_path, serial, camera_dir.name)
 
-            # Also check old format for backwards compatibility
             old_format_dir = self.download_dir / f"GoPro_{serial}"
             if old_format_dir.exists():
                 for file_path in old_format_dir.glob("*.*"):
                     if file_path.is_file():
-                        files.append({
-                            "path": str(file_path),
-                            "name": file_path.name,
-                            "size": file_path.stat().st_size,
-                            "serial": serial,
-                            "folder": old_format_dir.name
-                        })
+                        add_file(file_path, serial, old_format_dir.name)
         else:
-            # Get all downloaded files from all folders
-            # New format: YYYY-MM-DD_GoProXXXX
+            # Date-based format: YYYY-MM-DD_GoProXXXX
             for camera_dir in self.download_dir.glob("*_GoPro*"):
                 if camera_dir.is_dir():
-                    # Extract serial from folder name (e.g., "2026-02-18_GoPro8881" -> "8881")
-                    import re
                     match = re.search(r'GoPro(\d+)', camera_dir.name)
                     if match:
-                        serial = match.group(1)
+                        cam_serial = match.group(1)
                         for file_path in camera_dir.glob("*.*"):
                             if file_path.is_file():
-                                files.append({
-                                    "path": str(file_path),
-                                    "name": file_path.name,
-                                    "size": file_path.stat().st_size,
-                                    "serial": serial,
-                                    "folder": camera_dir.name
-                                })
+                                add_file(file_path, cam_serial, camera_dir.name)
 
-            # Old format: GoPro_XXXX (for backwards compatibility)
+            # Old format: GoPro_XXXX
             for camera_dir in self.download_dir.glob("GoPro_*"):
-                if camera_dir.is_dir() and not camera_dir.name.startswith("20"):  # Avoid double-counting
-                    serial = camera_dir.name.replace("GoPro_", "")
+                if camera_dir.is_dir() and not camera_dir.name.startswith("20"):
+                    cam_serial = camera_dir.name.replace("GoPro_", "")
                     for file_path in camera_dir.glob("*.*"):
                         if file_path.is_file():
-                            files.append({
-                                "path": str(file_path),
-                                "name": file_path.name,
-                                "size": file_path.stat().st_size,
-                                "serial": serial,
-                                "folder": camera_dir.name
-                            })
+                            add_file(file_path, cam_serial, camera_dir.name)
 
         # Sort by modification time (newest first)
         files.sort(key=lambda x: Path(x["path"]).stat().st_mtime, reverse=True)

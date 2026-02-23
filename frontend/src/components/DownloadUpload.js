@@ -2,19 +2,19 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import './DownloadUpload.css';
 
-function DownloadUpload({ cameras, apiUrl }) {
+function DownloadUpload({ cameras, apiUrl, downloadWsMessage, activeShoot }) {
   const [downloadedFiles, setDownloadedFiles] = useState([]);
   const [downloading, setDownloading] = useState(false);
   const [uploadConfig, setUploadConfig] = useState({
-    backend_url: 'https://tinify-backend-dev-868570596092.asia-south1.run.app/api/upload-file',
-    api_key: 'juniordevKey@9911'
+    backend_url: '',
+    api_key: ''
   });
   const [uploadingFiles, setUploadingFiles] = useState(new Set());
   const [message, setMessage] = useState(null);
   const [downloadProgress, setDownloadProgress] = useState({});
   const [uploadProgress, setUploadProgress] = useState(null); // { current: 1, total: 8, filename: "file.mp4" }
-  const [ws, setWs] = useState(null);
   const [currentWiFi, setCurrentWiFi] = useState(null);
+  const [wifiInfo, setWifiInfo] = useState({}); // Full wifi status {ssid, ip, on_gopro, network_type, display_name}
   const [uploadedZips, setUploadedZips] = useState([]); // Store all uploaded ZIP URLs
   const [maxFiles, setMaxFiles] = useState(''); // Number of files to download (empty = all files)
   const [bulkDownloadProgress, setBulkDownloadProgress] = useState(null); // { currentCamera: 2, totalCameras: 4, cameraName: "GoPro 2152" }
@@ -24,40 +24,21 @@ function DownloadUpload({ cameras, apiUrl }) {
   useEffect(() => {
     fetchDownloadedFiles();
     fetchCurrentWiFi();
-    connectWebSocket();
 
     // Refresh WiFi status every 5 seconds
     const wifiInterval = setInterval(fetchCurrentWiFi, 5000);
 
     return () => {
-      if (ws) {
-        ws.close();
-      }
       clearInterval(wifiInterval);
     };
   }, []);
 
-  const connectWebSocket = () => {
-    const websocket = new WebSocket('ws://127.0.0.1:8000/ws');
-
-    websocket.onopen = () => {
-      console.log('Download WebSocket connected');
-      setWs(websocket);
-    };
-
-    websocket.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      handleWebSocketMessage(data);
-    };
-
-    websocket.onerror = (error) => {
-      console.error('WebSocket error:', error);
-    };
-
-    websocket.onclose = () => {
-      console.log('WebSocket closed');
-    };
-  };
+  // Handle download WS messages forwarded from App.js
+  useEffect(() => {
+    if (downloadWsMessage) {
+      handleWebSocketMessage(downloadWsMessage);
+    }
+  }, [downloadWsMessage]);
 
   const handleWebSocketMessage = (data) => {
     if (data.type === 'download_status') {
@@ -118,10 +99,13 @@ function DownloadUpload({ cameras, apiUrl }) {
   const fetchCurrentWiFi = async () => {
     try {
       const response = await axios.get(`${apiUrl}/api/wifi/current`);
-      setCurrentWiFi(response.data.ssid);
+      setWifiInfo(response.data);
+      // Use display_name which works on macOS 26+ (where SSID is hidden)
+      setCurrentWiFi(response.data.display_name || response.data.ssid);
     } catch (error) {
       console.error('Failed to fetch current WiFi:', error);
       setCurrentWiFi(null);
+      setWifiInfo({});
     }
   };
 
@@ -214,7 +198,7 @@ function DownloadUpload({ cameras, apiUrl }) {
     }
   };
 
-  const handleDownloadFromCamera = async (serial) => {
+  const handleDownloadFromCamera = async (serial, shootName = null, takeNumber = null) => {
     const camera = cameras.find(c => c.serial === serial);
     if (!camera) {
       setMessage({ type: 'error', text: 'Camera not found' });
@@ -239,8 +223,13 @@ function DownloadUpload({ cameras, apiUrl }) {
         console.log(`Limiting download to last ${maxFiles} files`);
       }
 
+      const params = {};
+      if (maxFiles) params.max_files = parseInt(maxFiles);
+      if (shootName) params.shoot_name = shootName;
+      if (takeNumber !== null && takeNumber !== undefined) params.take_number = takeNumber;
+
       const response = await axios.post(`${apiUrl}/api/download/${serial}`, null, {
-        params: maxFiles ? { max_files: parseInt(maxFiles) } : {},
+        params,
         timeout: 300000 // 5 minute timeout for large files
       });
 
@@ -329,8 +318,19 @@ function DownloadUpload({ cameras, apiUrl }) {
           console.log(`Limiting download to last ${maxFiles} files`);
         }
 
+        const dlParams = {};
+        if (maxFiles) dlParams.max_files = parseInt(maxFiles);
+        // Pass shoot/take info when an active shoot has completed takes
+        if (activeShoot && activeShoot.takes && activeShoot.takes.length > 0) {
+          const latestTake = activeShoot.takes[activeShoot.takes.length - 1];
+          if (latestTake.stopped_at) {
+            dlParams.shoot_name = activeShoot.name;
+            dlParams.take_number = latestTake.take_number;
+          }
+        }
+
         const response = await axios.post(`${apiUrl}/api/download/${camera.serial}`, null, {
-          params: maxFiles ? { max_files: parseInt(maxFiles) } : {},
+          params: dlParams,
           timeout: 300000 // 5 minute timeout for large files
         });
 
@@ -509,34 +509,26 @@ function DownloadUpload({ cameras, apiUrl }) {
           type: 'success',
           text: (
             <div>
-              <div style={{ marginBottom: '0.5rem' }}>
+              <div className="msg-success-header">
                 🎉 Success! {files_count} files zipped and uploaded ({zip_size_mb} MB)
               </div>
-              <div style={{ marginTop: '0.5rem' }}>
+              <div className="msg-zip-link-section">
                 <strong>Download ZIP:</strong>
                 <br />
                 <a
                   href={zip_url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  style={{ color: '#667eea', textDecoration: 'underline', wordBreak: 'break-all' }}
+                  className="msg-zip-link"
                 >
                   {zip_filename}
                 </a>
               </div>
               <button
+                className="btn-copy-zip-url"
                 onClick={() => {
                   navigator.clipboard.writeText(zip_url);
                   alert('ZIP URL copied to clipboard!');
-                }}
-                style={{
-                  marginTop: '0.75rem',
-                  padding: '0.5rem 1rem',
-                  background: '#667eea',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '6px',
-                  cursor: 'pointer'
                 }}
               >
                 📋 Copy ZIP URL
@@ -645,34 +637,26 @@ function DownloadUpload({ cameras, apiUrl }) {
         type: 'success',
         text: (
           <div>
-            <div style={{ marginBottom: '0.5rem' }}>
+            <div className="msg-success-header">
               🎉 Success! {files_count} files uploaded and zipped ({zip_size_mb} MB)
             </div>
-            <div style={{ marginTop: '0.5rem' }}>
+            <div className="msg-zip-link-section">
               <strong>Download ZIP:</strong>
               <br />
               <a
                 href={zip_url}
                 target="_blank"
                 rel="noopener noreferrer"
-                style={{ color: '#667eea', textDecoration: 'underline', wordBreak: 'break-all' }}
+                className="msg-zip-link"
               >
                 {zip_filename}
               </a>
             </div>
             <button
+              className="btn-copy-zip-url"
               onClick={() => {
                 navigator.clipboard.writeText(zip_url);
                 alert('ZIP URL copied to clipboard!');
-              }}
-              style={{
-                marginTop: '0.75rem',
-                padding: '0.5rem 1rem',
-                background: '#667eea',
-                color: 'white',
-                border: 'none',
-                borderRadius: '6px',
-                cursor: 'pointer'
               }}
             >
               📋 Copy ZIP URL
@@ -700,13 +684,20 @@ function DownloadUpload({ cameras, apiUrl }) {
     return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
   };
 
-  // Group files by folder (which includes date and camera name)
+  // Group files by folder — use shoot/take hierarchy when available
   const groupedFiles = downloadedFiles.reduce((acc, file) => {
-    const folderKey = file.folder || `GoPro_${file.serial}`; // Use folder if available, fallback to serial
+    let folderKey;
+    if (file.shoot_name && file.take_folder) {
+      folderKey = `${file.shoot_name}/${file.take_folder}/GoPro${file.serial}`;
+    } else {
+      folderKey = file.folder || `GoPro_${file.serial}`;
+    }
     if (!acc[folderKey]) {
       acc[folderKey] = {
         serial: file.serial,
-        files: []
+        files: [],
+        shoot_name: file.shoot_name || null,
+        take_number: file.take_number !== undefined ? file.take_number : null
       };
     }
     acc[folderKey].files.push(file);
@@ -722,29 +713,23 @@ function DownloadUpload({ cameras, apiUrl }) {
       )}
 
       {/* WiFi Status Warning */}
-      {currentWiFi && cameras.some(cam => currentWiFi === cam.wifi_ssid || cam.wifi_ssid.includes(currentWiFi)) && (
-        <div className="card" style={{ background: '#fff3cd', borderColor: '#ffc107' }}>
-          <h2 style={{ color: '#856404' }}>⚠️ WiFi Connection Warning</h2>
-          <div className="alert alert-warning" style={{ background: 'transparent', border: 'none', padding: 0 }}>
-            <p style={{ marginBottom: '1rem', color: '#856404' }}>
+      {wifiInfo.on_gopro && (
+        <div className="card wifi-warning-card">
+          <h2>⚠️ WiFi Connection Warning</h2>
+          <div className="alert alert-warning wifi-warning-content">
+            <p className="wifi-warning-text">
               <strong>You are currently connected to GoPro WiFi: {currentWiFi}</strong>
             </p>
-            <p style={{ marginBottom: '1rem', color: '#856404' }}>
+            <p className="wifi-warning-text">
               GoPro WiFi has no internet connectivity. You must disconnect and connect to your home/office WiFi before uploading files to S3.
             </p>
             <button
-              className="btn"
+              className="btn btn-wifi-disconnect"
               onClick={handleDisconnectWiFi}
-              style={{
-                background: '#ffc107',
-                color: '#000',
-                border: 'none',
-                fontWeight: 'bold'
-              }}
             >
               📡 Disconnect from GoPro WiFi
             </button>
-            <p style={{ marginTop: '1rem', fontSize: '0.9rem', color: '#856404' }}>
+            <p className="wifi-warning-footer">
               After disconnecting, reconnect to your home/office WiFi manually, then return here to upload files.
             </p>
           </div>
@@ -754,28 +739,33 @@ function DownloadUpload({ cameras, apiUrl }) {
       {/* Current WiFi Display */}
       <div className="card">
         <h2>WiFi Status</h2>
-        <div style={{ padding: '1rem', background: '#f8f9fa', borderRadius: '6px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div className="wifi-status-box">
+          <div className="wifi-status-row">
             <div>
               <strong>Current WiFi:</strong>{' '}
-              <span style={{
-                color: currentWiFi && cameras.some(cam => currentWiFi === cam.wifi_ssid || cam.wifi_ssid.includes(currentWiFi)) ? '#dc3545' : '#28a745',
-                fontWeight: 'bold'
-              }}>
+              <span className={
+                wifiInfo.on_gopro ? 'wifi-name--gopro' :
+                wifiInfo.network_type === 'internet' ? 'wifi-name--internet' :
+                'wifi-name--disconnected'
+              }>
                 {currentWiFi || 'Not connected'}
               </span>
             </div>
             <button
-              className="btn btn-secondary btn-sm"
+              className="btn btn-secondary btn-sm btn-refresh"
               onClick={fetchCurrentWiFi}
-              style={{ fontSize: '0.875rem', padding: '0.4rem 0.8rem' }}
             >
-              🔄 Refresh
+              Refresh
             </button>
           </div>
-          {currentWiFi && !cameras.some(cam => currentWiFi === cam.wifi_ssid || cam.wifi_ssid.includes(currentWiFi)) && (
-            <div style={{ marginTop: '0.5rem', color: '#28a745', fontSize: '0.9rem' }}>
-              ✅ Connected to internet WiFi - ready to upload files
+          {wifiInfo.network_type === 'internet' && (
+            <div className="wifi-hint--internet">
+              Connected to internet WiFi - ready to upload files
+            </div>
+          )}
+          {wifiInfo.on_gopro && (
+            <div className="wifi-hint--gopro">
+              Connected to GoPro WiFi - no internet access. Disconnect to upload files.
             </div>
           )}
         </div>
@@ -805,9 +795,8 @@ function DownloadUpload({ cameras, apiUrl }) {
           </div>
         </div>
         <button
-          className="btn btn-secondary"
+          className="btn btn-secondary btn-test-s3"
           onClick={handleTestS3Backend}
-          style={{ marginTop: '1rem' }}
         >
           🔍 Test S3 Backend Connection
         </button>
@@ -825,7 +814,7 @@ function DownloadUpload({ cameras, apiUrl }) {
           <>
             <div className="alert alert-info">
               <strong>How it works:</strong>
-              <ol style={{ margin: '0.5rem 0', paddingLeft: '1.5rem' }}>
+              <ol className="how-it-works-list">
                 <li>Stop all recordings first (Recording Control tab)</li>
                 <li>Click "Enable WiFi on All Cameras" below (turns on WiFi AP via BLE)</li>
                 <li>Wait 20 seconds for WiFi to stabilize</li>
@@ -834,8 +823,8 @@ function DownloadUpload({ cameras, apiUrl }) {
             </div>
 
             {/* Download Limit Input */}
-            <div className="form-group" style={{ marginBottom: '1rem' }}>
-              <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '500' }}>
+            <div className="form-group download-limit-group">
+              <label className="download-limit-label">
                 Number of Files to Download (Optional)
               </label>
               <input
@@ -844,15 +833,9 @@ function DownloadUpload({ cameras, apiUrl }) {
                 value={maxFiles}
                 onChange={(e) => setMaxFiles(e.target.value)}
                 placeholder="Leave empty to download all files"
-                style={{
-                  width: '100%',
-                  padding: '0.5rem',
-                  borderRadius: '6px',
-                  border: '1px solid #ddd',
-                  fontSize: '1rem'
-                }}
+                className="download-limit-input"
               />
-              <small style={{ display: 'block', marginTop: '0.25rem', color: '#666' }}>
+              <small className="download-limit-hint">
                 Leave empty to download all files, or enter a number (e.g., 5) to download only the last N files (newest first)
               </small>
             </div>
@@ -868,28 +851,25 @@ function DownloadUpload({ cameras, apiUrl }) {
 
             {/* Bulk Download Progress */}
             {bulkDownloadProgress && (
-              <div className="card" style={{ background: '#e7f3ff', border: '2px solid #667eea', marginTop: '1rem' }}>
-                <h3 style={{ color: '#667eea', marginBottom: '1rem' }}>
+              <div className="card bulk-progress-card">
+                <h3 className="bulk-progress-title">
                   📥 Bulk Download Progress
                 </h3>
-                <div style={{ marginBottom: '0.5rem', fontSize: '1.1rem', fontWeight: 'bold', color: '#333' }}>
+                <div className="bulk-progress-camera">
                   Camera {bulkDownloadProgress.currentCamera} of {bulkDownloadProgress.totalCameras}: {bulkDownloadProgress.cameraName}
                 </div>
-                <div className="progress-bar" style={{ marginBottom: '0.5rem' }}>
+                <div className="progress-bar bulk-progress-bar">
                   <div
                     className="progress-fill"
-                    style={{
-                      width: `${(bulkDownloadProgress.currentCamera / bulkDownloadProgress.totalCameras) * 100}%`,
-                      background: '#667eea'
-                    }}
+                    style={{ width: `${(bulkDownloadProgress.currentCamera / bulkDownloadProgress.totalCameras) * 100}%` }}
                   ></div>
                 </div>
                 {downloadProgress[bulkDownloadProgress.serial] && (
-                  <div style={{ marginTop: '1rem', padding: '0.75rem', background: 'white', borderRadius: '6px' }}>
-                    <div style={{ marginBottom: '0.5rem', color: '#666' }}>
+                  <div className="bulk-progress-detail">
+                    <div className="bulk-progress-detail-text">
                       Downloading: {downloadProgress[bulkDownloadProgress.serial].filename}
                     </div>
-                    <div style={{ marginBottom: '0.5rem', color: '#666' }}>
+                    <div className="bulk-progress-detail-text">
                       File {downloadProgress[bulkDownloadProgress.serial].current} of {downloadProgress[bulkDownloadProgress.serial].total}
                     </div>
                     <div className="progress-bar">
@@ -898,7 +878,7 @@ function DownloadUpload({ cameras, apiUrl }) {
                         style={{ width: `${downloadProgress[bulkDownloadProgress.serial].percent}%` }}
                       ></div>
                     </div>
-                    <div style={{ textAlign: 'center', marginTop: '0.25rem', fontWeight: 'bold' }}>
+                    <div className="bulk-progress-percent">
                       {downloadProgress[bulkDownloadProgress.serial].percent}%
                     </div>
                   </div>
@@ -907,18 +887,11 @@ function DownloadUpload({ cameras, apiUrl }) {
             )}
 
             {/* Download from All Cameras Button */}
-            <div style={{ marginTop: '1rem', marginBottom: '1rem' }}>
+            <div className="download-all-wrapper">
               <button
-                className="btn btn-primary"
+                className="btn btn-primary btn-download-all"
                 onClick={handleDownloadFromAllCameras}
                 disabled={downloading}
-                style={{
-                  width: '100%',
-                  padding: '1rem',
-                  fontSize: '1.1rem',
-                  fontWeight: 'bold',
-                  background: downloading ? '#ccc' : '#667eea'
-                }}
               >
                 {downloading ? (
                   <>
@@ -929,12 +902,12 @@ function DownloadUpload({ cameras, apiUrl }) {
                   `Step 2: Download from All ${connectedCameras.length} Cameras`
                 )}
               </button>
-              <small style={{ display: 'block', marginTop: '0.5rem', color: '#666', textAlign: 'center' }}>
+              <small className="download-all-hint">
                 This will download {maxFiles ? `last ${maxFiles} files` : 'all files'} from each camera sequentially
               </small>
             </div>
 
-            <div style={{ margin: '1rem 0', padding: '0.75rem', background: '#f8f9fa', borderRadius: '6px', textAlign: 'center', color: '#666' }}>
+            <div className="section-divider">
               <strong>OR</strong> download from individual cameras below
             </div>
 
@@ -982,7 +955,7 @@ function DownloadUpload({ cameras, apiUrl }) {
 
       {/* Downloaded Files */}
       <div className="card">
-        <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div className="card-header card-header-row">
           <h2>Downloaded Files ({downloadedFiles.length})</h2>
           {downloadedFiles.length > 0 && (
             <button
@@ -1004,20 +977,20 @@ function DownloadUpload({ cameras, apiUrl }) {
 
         {/* Upload Progress Bar */}
         {uploadProgress && (
-          <div className="download-progress-box" style={{ margin: '1rem 0', background: '#e7f3ff', border: '2px solid #667eea' }}>
+          <div className="download-progress-box upload-progress-box">
             <div className="progress-info">
-              <span style={{ fontWeight: 'bold', color: '#667eea' }}>Uploading: {uploadProgress.filename}</span>
-              <span style={{ color: '#667eea' }}>
+              <span>Uploading: {uploadProgress.filename}</span>
+              <span>
                 File {uploadProgress.current} of {uploadProgress.total}
               </span>
             </div>
             <div className="progress-bar">
               <div
                 className="progress-fill"
-                style={{ width: `${uploadProgress.percent}%`, background: '#667eea' }}
+                style={{ width: `${uploadProgress.percent}%` }}
               ></div>
             </div>
-            <div className="progress-percent" style={{ color: '#667eea' }}>
+            <div className="progress-percent">
               {uploadProgress.percent}%
             </div>
           </div>
@@ -1031,14 +1004,13 @@ function DownloadUpload({ cameras, apiUrl }) {
           <div className="files-by-camera">
             {Object.entries(groupedFiles).map(([folderKey, groupData]) => (
               <div key={folderKey} className="camera-files-group">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                <div className="camera-group-row">
                   <h3 className="camera-group-header">
                     {folderKey} ({groupData.files.length} files)
                   </h3>
                   <button
-                    className="btn btn-success"
+                    className="btn btn-success btn-upload-zip"
                     onClick={() => handleUploadCameraBulk(groupData.serial, folderKey)}
-                    style={{ fontSize: '0.9rem', padding: '0.5rem 1rem' }}
                   >
                     Upload All to S3 as ZIP
                   </button>
@@ -1077,63 +1049,36 @@ function DownloadUpload({ cameras, apiUrl }) {
 
       {/* Uploaded ZIPs - S3 URLs */}
       {uploadedZips.length > 0 && (
-        <div className="card" style={{ background: '#f0f9ff', borderColor: '#667eea' }}>
-          <h2 style={{ color: '#667eea' }}>📦 Uploaded ZIP Files ({uploadedZips.length})</h2>
-          <p style={{ color: '#666', marginBottom: '1rem' }}>
+        <div className="card uploaded-zips-card">
+          <h2>📦 Uploaded ZIP Files ({uploadedZips.length})</h2>
+          <p className="uploaded-zips-desc">
             All your uploaded ZIPs are listed below. URLs remain accessible for easy sharing.
           </p>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          <div className="uploaded-zips-list">
             {uploadedZips.map((zip, idx) => (
-              <div
-                key={idx}
-                style={{
-                  background: 'white',
-                  padding: '1rem',
-                  borderRadius: '8px',
-                  border: '2px solid #667eea',
-                  boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.75rem' }}>
-                  <div style={{ flex: 1 }}>
-                    <h3 style={{ margin: 0, color: '#333', fontSize: '1.1rem' }}>
+              <div key={idx} className="zip-card">
+                <div className="zip-card-header">
+                  <div className="zip-card-header-inner">
+                    <h3 className="zip-card-title">
                       {zip.folder_name}
                     </h3>
-                    <div style={{ color: '#666', fontSize: '0.9rem', marginTop: '0.25rem' }}>
+                    <div className="zip-card-meta">
                       {zip.files_count} files • {zip.zip_size_mb} MB • Uploaded: {zip.uploaded_at}
                     </div>
                   </div>
                 </div>
 
-                <div style={{
-                  background: '#f8f9fa',
-                  padding: '0.75rem',
-                  borderRadius: '6px',
-                  marginBottom: '0.75rem',
-                  fontFamily: 'monospace',
-                  fontSize: '0.85rem',
-                  wordBreak: 'break-all',
-                  color: '#495057'
-                }}>
+                <div className="zip-url-display">
                   {zip.zip_url}
                 </div>
 
-                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <div className="zip-actions">
                   <button
+                    className="btn-copy-url"
                     onClick={() => {
                       navigator.clipboard.writeText(zip.zip_url);
                       alert('ZIP URL copied to clipboard!');
-                    }}
-                    style={{
-                      padding: '0.5rem 1rem',
-                      background: '#667eea',
-                      color: 'white',
-                      border: 'none',
-                      borderRadius: '6px',
-                      cursor: 'pointer',
-                      fontSize: '0.9rem',
-                      fontWeight: '500'
                     }}
                   >
                     📋 Copy URL
@@ -1142,18 +1087,7 @@ function DownloadUpload({ cameras, apiUrl }) {
                     href={zip.zip_url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    style={{
-                      padding: '0.5rem 1rem',
-                      background: '#28a745',
-                      color: 'white',
-                      border: 'none',
-                      borderRadius: '6px',
-                      cursor: 'pointer',
-                      fontSize: '0.9rem',
-                      fontWeight: '500',
-                      textDecoration: 'none',
-                      display: 'inline-block'
-                    }}
+                    className="btn-download-zip"
                   >
                     ⬇️ Download ZIP
                   </a>
@@ -1163,20 +1097,11 @@ function DownloadUpload({ cameras, apiUrl }) {
           </div>
 
           <button
+            className="btn-clear-history"
             onClick={() => {
               if (window.confirm('Clear all uploaded ZIP history? (URLs will still work, this just clears the list)')) {
                 setUploadedZips([]);
               }
-            }}
-            style={{
-              marginTop: '1rem',
-              padding: '0.5rem 1rem',
-              background: '#dc3545',
-              color: 'white',
-              border: 'none',
-              borderRadius: '6px',
-              cursor: 'pointer',
-              fontSize: '0.9rem'
             }}
           >
             🗑️ Clear History
@@ -1191,7 +1116,7 @@ function DownloadUpload({ cameras, apiUrl }) {
           <li><strong>Stop all recordings</strong> - Go to Recording Control tab and stop recording</li>
           <li><strong>Enable WiFi</strong> - Click "Step 1: Enable WiFi on All Cameras" and wait 20 seconds</li>
           <li><strong>Download files</strong> - Optionally specify number of files to download (e.g., 5 for last 5 files), then:
-            <ul style={{ marginTop: '0.5rem', color: '#888' }}>
+            <ul className="instructions-sublist">
               <li><strong>Option A:</strong> Click "Step 2: Download from All Cameras" to download from all cameras sequentially (recommended)</li>
               <li><strong>Option B:</strong> Click "Download Files" for individual cameras if you only need specific cameras</li>
               <li>Your Mac will automatically connect to each camera's WiFi network</li>
@@ -1201,7 +1126,7 @@ function DownloadUpload({ cameras, apiUrl }) {
             </ul>
           </li>
           <li><strong>Upload to S3</strong> - Configure S3 settings at the top, then:
-            <ul style={{ marginTop: '0.5rem', color: '#888' }}>
+            <ul className="instructions-sublist">
               <li>Click "Upload All to S3 as ZIP" for a camera to create a dated ZIP (e.g., 2026-02-18_GoPro8881.zip)</li>
               <li>Or click "Upload to S3" next to individual files</li>
             </ul>

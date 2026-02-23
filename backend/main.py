@@ -12,6 +12,7 @@ from pathlib import Path
 from camera_manager import CameraManager
 from wifi_manager import WiFiManager
 from download_manager import DownloadManager
+from shoot_manager import ShootManager
 
 # Setup logging
 logging.basicConfig(
@@ -36,6 +37,7 @@ app.add_middleware(
 camera_manager = CameraManager()
 wifi_manager = WiFiManager()
 download_manager = DownloadManager()
+shoot_manager = ShootManager()
 
 # WebSocket connections for real-time updates
 websocket_connections: List[WebSocket] = []
@@ -73,6 +75,14 @@ class CreateZipModel(BaseModel):
     zip_name: Optional[str] = None
 
 
+class CreateShootModel(BaseModel):
+    name: str
+
+
+class SetActiveShootModel(BaseModel):
+    shoot_id: str
+
+
 # ============== WebSocket ==============
 
 @app.websocket("/ws")
@@ -103,6 +113,7 @@ async def connection_monitor():
 
     # Track previous state
     previous_states = {}
+    battery_poll_counter = 0
 
     logger.info("🔄 Connection monitor started - checking every 0.5 seconds")
 
@@ -131,6 +142,20 @@ async def connection_monitor():
 
                     # Update previous state
                     previous_states[serial] = current_connected
+
+            # Poll battery every 60 seconds (120 iterations * 0.5s = 60s)
+            battery_poll_counter += 1
+            if battery_poll_counter >= 120:
+                battery_poll_counter = 0
+                try:
+                    battery_levels = await camera_manager.get_all_battery_levels()
+                    if any(v is not None for v in battery_levels.values()):
+                        await broadcast_message({
+                            "type": "battery_update",
+                            "levels": battery_levels
+                        })
+                except Exception as e:
+                    logger.debug(f"Battery poll error: {e}")
 
             # Wait 0.5 seconds before next check (checks 2x per second)
             await asyncio.sleep(0.5)
@@ -238,9 +263,9 @@ async def startup_event():
     background_monitor_task = asyncio.create_task(connection_monitor())
     logger.info("✅ Background connection monitor started")
 
-    # STEP 3: Auto-detect existing BLE connections
-    asyncio.create_task(auto_detect_connections())
-    logger.info("✅ Auto-detection task scheduled")
+    # STEP 3: Skip auto-detect on startup (blocks event loop with BLE scanning)
+    # Users can connect manually via UI buttons
+    logger.info("ℹ️  Auto-detection disabled on startup — use Connect buttons in UI")
 
 
 @app.on_event("shutdown")
@@ -291,7 +316,7 @@ async def add_camera(camera: CameraModel):
 @app.delete("/api/cameras/{serial}")
 async def remove_camera(serial: str):
     """Remove a camera"""
-    success = camera_manager.remove_camera(serial)
+    success = await camera_manager.remove_camera(serial)
     if success:
         await broadcast_message({"type": "camera_removed", "serial": serial})
         return {"success": True, "message": "Camera removed"}
@@ -378,6 +403,31 @@ async def connect_all_cameras():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/cameras/connect/{serial}")
+async def connect_single_camera(serial: str):
+    """Connect a single camera via BLE"""
+    try:
+        if serial not in camera_manager.cameras:
+            raise HTTPException(status_code=404, detail=f"Camera {serial} not found")
+
+        camera = camera_manager.cameras[serial]
+        logger.info(f"Connecting single camera: {serial}")
+        success = await camera.connect_ble()
+
+        await broadcast_message({
+            "type": "camera_connection",
+            "serial": serial,
+            "connected": success
+        })
+
+        return {"success": success, "serial": serial, "connected": success}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Connect single camera failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/cameras/disconnect-all")
 async def disconnect_all_cameras():
     """Disconnect all cameras"""
@@ -414,6 +464,17 @@ async def check_existing_connections():
         }
     except Exception as e:
         logger.error(f"Check connections failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/cameras/battery")
+async def get_battery_levels():
+    """Get battery levels for all cameras"""
+    try:
+        levels = await camera_manager.get_all_battery_levels()
+        return {"levels": levels}
+    except Exception as e:
+        logger.error(f"Battery query failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -458,11 +519,28 @@ async def start_recording():
         success_count = sum(1 for s in results.values() if s)
         logger.info(f"Final: {success_count}/{len(results)} cameras recording")
 
-        return {
+        # Track take if a shoot is active
+        successful_serials = [s for s, ok in results.items() if ok]
+        take = shoot_manager.start_take(successful_serials)
+        active_shoot = shoot_manager.get_active_shoot()
+
+        response_data = {
             "success": True,
             "results": results,
             "cameras": camera_manager.list_cameras()
         }
+
+        if take and active_shoot:
+            response_data["take"] = take
+            response_data["shoot_name"] = active_shoot["name"]
+            await broadcast_message({
+                "type": "take_started",
+                "shoot_name": active_shoot["name"],
+                "shoot_id": active_shoot["id"],
+                "take": take
+            })
+
+        return response_data
     except HTTPException:
         raise
     except Exception as e:
@@ -509,15 +587,101 @@ async def stop_recording():
         logger.info(f"Final: {success_count}/{len(results)} cameras stopped")
         logger.info("Waiting 5 seconds for files to save...")
 
-        return {
+        # Stop take if a shoot is active
+        take = shoot_manager.stop_take()
+        active_shoot = shoot_manager.get_active_shoot()
+
+        response_data = {
             "success": True,
             "results": results,
             "cameras": camera_manager.list_cameras()
         }
+
+        if take and active_shoot:
+            response_data["take"] = take
+            response_data["shoot_name"] = active_shoot["name"]
+            await broadcast_message({
+                "type": "take_stopped",
+                "shoot_name": active_shoot["name"],
+                "shoot_id": active_shoot["id"],
+                "take": take
+            })
+
+        return response_data
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Stop recording failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============== Shoot Management ==============
+
+@app.post("/api/shoots")
+async def create_shoot(shoot: CreateShootModel):
+    """Create a new shoot"""
+    try:
+        new_shoot = shoot_manager.create_shoot(shoot.name)
+        await broadcast_message({"type": "shoot_created", "shoot": new_shoot})
+        return {"success": True, "shoot": new_shoot}
+    except Exception as e:
+        logger.error(f"Create shoot failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/shoots")
+async def list_shoots():
+    """List all shoots"""
+    return {"shoots": shoot_manager.list_shoots()}
+
+
+@app.get("/api/shoots/active")
+async def get_active_shoot():
+    """Get the currently active shoot"""
+    return {"shoot": shoot_manager.get_active_shoot()}
+
+
+@app.post("/api/shoots/active")
+async def set_active_shoot(body: SetActiveShootModel):
+    """Set the active shoot"""
+    try:
+        shoot = shoot_manager.set_active_shoot(body.shoot_id)
+        if not shoot:
+            raise HTTPException(status_code=404, detail="Shoot not found")
+        await broadcast_message({"type": "shoot_activated", "shoot": shoot})
+        return {"success": True, "shoot": shoot}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Set active shoot failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/shoots/deactivate")
+async def deactivate_shoot():
+    """End the current shoot"""
+    try:
+        shoot_manager.deactivate_shoot()
+        await broadcast_message({"type": "shoot_deactivated"})
+        return {"success": True}
+    except Exception as e:
+        logger.error(f"Deactivate shoot failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/shoots/{shoot_id}")
+async def delete_shoot(shoot_id: str):
+    """Delete a shoot"""
+    try:
+        success = shoot_manager.delete_shoot(shoot_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Shoot not found")
+        await broadcast_message({"type": "shoot_deleted", "shoot_id": shoot_id})
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Delete shoot failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -625,6 +789,24 @@ async def start_preview_single(serial: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/preview/stream-start")
+async def start_camera_stream():
+    """Tell GoPro to start UDP/HLS stream (must be on camera WiFi)"""
+    import requests as sync_requests
+    try:
+        logger.info("📹 Starting camera stream via HTTP...")
+        loop = asyncio.get_event_loop()
+        resp = await loop.run_in_executor(
+            None,
+            lambda: sync_requests.get("http://10.5.5.9:8080/gopro/camera/stream/start", timeout=10)
+        )
+        logger.info(f"Stream start response: {resp.status_code}")
+        return {"success": resp.status_code == 200, "status_code": resp.status_code}
+    except Exception as e:
+        logger.warning(f"Stream start failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
 @app.post("/api/preview/stop/{serial}")
 async def stop_preview_single(serial: str):
     """Stop live preview on a specific camera"""
@@ -703,9 +885,29 @@ async def stop_preview():
 
 @app.get("/api/wifi/current")
 async def get_current_wifi():
-    """Get current WiFi SSID"""
+    """Get current WiFi status — works on macOS 26+ where SSID is hidden"""
     ssid = wifi_manager.get_current_wifi()
-    return {"ssid": ssid}
+    ip = wifi_manager.get_current_ip()
+    on_gopro = wifi_manager.is_on_gopro_network()
+
+    # Determine network type for frontend display
+    if on_gopro:
+        network_type = "gopro"
+        display_name = f"GoPro WiFi ({ip})"
+    elif ip:
+        network_type = "internet"
+        display_name = ssid or f"Connected ({ip})"
+    else:
+        network_type = "disconnected"
+        display_name = None
+
+    return {
+        "ssid": ssid,
+        "ip": ip,
+        "on_gopro": on_gopro,
+        "network_type": network_type,
+        "display_name": display_name
+    }
 
 
 @app.post("/api/wifi/connect")
@@ -714,6 +916,25 @@ async def connect_wifi(connection: WiFiConnectionModel):
     try:
         success = wifi_manager.connect_wifi(connection.ssid, connection.password)
         return {"success": success}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/wifi/connect-camera/{serial}")
+async def connect_camera_wifi(serial: str):
+    """Connect to a camera's WiFi using server-stored credentials"""
+    camera = camera_manager.get_camera(serial)
+    if not camera:
+        raise HTTPException(status_code=404, detail=f"Camera {serial} not found")
+    try:
+        loop = asyncio.get_event_loop()
+        success = await loop.run_in_executor(
+            None,
+            wifi_manager.connect_wifi,
+            camera.wifi_ssid,
+            camera.wifi_password
+        )
+        return {"success": success, "wifi_ssid": camera.wifi_ssid}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -797,7 +1018,7 @@ async def get_media_list():
 
 
 @app.post("/api/download/{serial}")
-async def download_from_camera(serial: str, max_files: Optional[int] = None):
+async def download_from_camera(serial: str, max_files: Optional[int] = None, shoot_name: Optional[str] = None, take_number: Optional[int] = None):
     """Download files from a camera (optionally limit to last N files)"""
     try:
         logger.info("=" * 60)
@@ -819,13 +1040,33 @@ async def download_from_camera(serial: str, max_files: Optional[int] = None):
         logger.info(f"   Connected: {camera.connected}")
         logger.info("=" * 60)
 
-        # Save current WiFi before switching
+        # Save current network state before switching
         loop = asyncio.get_event_loop()
         original_wifi = await loop.run_in_executor(None, wifi_manager.get_current_wifi)
-        logger.info(f"📡 Original WiFi: {original_wifi}")
+        original_ip = await loop.run_in_executor(None, wifi_manager.get_current_ip)
+        on_gopro_already = await loop.run_in_executor(None, wifi_manager.is_on_gopro_network)
+        logger.info(f"📡 Original WiFi: {original_wifi or '(hidden on macOS 26)'}")
+        logger.info(f"📡 Original IP: {original_ip}")
+        logger.info(f"📡 Already on GoPro network: {on_gopro_already}")
 
-        # Connect to camera WiFi
-        logger.info(f"Step 1: Connecting to camera WiFi: {camera.wifi_ssid}")
+        # Step 1: Enable WiFi AP on camera via BLE (must happen before Mac can connect)
+        logger.info(f"Step 1: Enabling WiFi AP on camera {serial} via BLE...")
+        await broadcast_message({
+            "type": "download_status",
+            "serial": serial,
+            "status": "enabling_wifi",
+            "message": f"Enabling WiFi on camera {serial}..."
+        })
+
+        if camera.connected and camera.gopro and camera.gopro.is_ble_connected:
+            wifi_enabled = await camera.enable_wifi()
+            if not wifi_enabled:
+                logger.warning(f"⚠️  WiFi AP enable returned False, attempting connection anyway...")
+        else:
+            logger.warning(f"⚠️  Camera {serial} not BLE-connected, attempting WiFi connection anyway...")
+
+        # Step 2: Connect Mac to camera WiFi
+        logger.info(f"Step 2: Connecting to camera WiFi: {camera.wifi_ssid}")
         await broadcast_message({
             "type": "download_status",
             "serial": serial,
@@ -861,7 +1102,7 @@ async def download_from_camera(serial: str, max_files: Optional[int] = None):
         })
 
         # Download files with progress updates
-        logger.info(f"Step 2: Fetching media list from camera...")
+        logger.info(f"Step 3: Fetching media list from camera...")
 
         def progress_callback(filename: str, current: int, total: int, percent: int):
             """Progress callback that broadcasts to WebSocket"""
@@ -883,15 +1124,17 @@ async def download_from_camera(serial: str, max_files: Optional[int] = None):
                 logger.warning(f"Could not broadcast progress: {e}")
 
         # Run download in thread pool
-        logger.info("Step 3: Starting file download...")
+        logger.info("Step 4: Starting file download...")
 
-        # Use partial to pass max_files parameter
+        # Use partial to pass parameters
         from functools import partial
         download_func = partial(
             download_manager.download_all_from_camera,
             serial,
             progress_callback,
-            max_files
+            max_files,
+            shoot_name=shoot_name,
+            take_number=take_number
         )
         downloaded_files = await loop.run_in_executor(None, download_func)
 
@@ -903,48 +1146,53 @@ async def download_from_camera(serial: str, max_files: Optional[int] = None):
             logger.info(f"  - {f.name}")
         logger.info("=" * 60)
 
-        # Step 4: Reconnect to original WiFi for uploading
-        if original_wifi and original_wifi != camera.wifi_ssid:
-            logger.info(f"Step 4: Reconnecting to original WiFi: {original_wifi}")
+        # Step 5: Reconnect to original WiFi for uploading
+        # On macOS 26+, get_current_wifi() returns None due to privacy restrictions
+        # Use IP-based detection: if we were on a non-GoPro network before, try to restore it
+        should_reconnect = not on_gopro_already  # Only reconnect if we weren't already on GoPro WiFi
+        if should_reconnect:
+            logger.info(f"Step 5: Reconnecting to home WiFi (original IP: {original_ip})...")
             await broadcast_message({
                 "type": "download_status",
                 "serial": serial,
                 "status": "reconnecting_wifi",
-                "message": f"Reconnecting to {original_wifi} for internet access..."
+                "message": "Reconnecting to home WiFi..."
             })
 
-            # Disconnect from GoPro WiFi first
+            # Disconnect from GoPro WiFi (turns WiFi off then on — macOS auto-reconnects to preferred network)
             await loop.run_in_executor(None, wifi_manager.disconnect)
-            await asyncio.sleep(3)  # Wait for disconnect
 
-            # Try to reconnect to original WiFi
-            # Note: We don't have the password, so we rely on macOS remembering it
-            logger.info(f"Attempting automatic reconnection to {original_wifi}...")
-            logger.info("If this fails, you'll need to manually reconnect to your WiFi")
+            # Wait for macOS to auto-reconnect to preferred network
+            logger.info("Waiting for macOS to auto-reconnect to preferred network...")
+            reconnected = False
+            for attempt in range(10):
+                await asyncio.sleep(2)
+                current_ip = await loop.run_in_executor(None, wifi_manager.get_current_ip)
+                still_on_gopro = await loop.run_in_executor(None, wifi_manager.is_on_gopro_network)
 
-            await asyncio.sleep(5)  # Wait for macOS to auto-reconnect
+                if current_ip and not still_on_gopro:
+                    logger.info(f"✅ Reconnected to home WiFi (IP: {current_ip})")
+                    await broadcast_message({
+                        "type": "download_status",
+                        "serial": serial,
+                        "status": "wifi_restored",
+                        "message": f"Reconnected to home WiFi! Ready to upload."
+                    })
+                    reconnected = True
+                    break
+                logger.info(f"   Waiting... attempt {attempt+1}/10 (IP: {current_ip})")
 
-            # Check if reconnection succeeded
-            current_wifi = await loop.run_in_executor(None, wifi_manager.get_current_wifi)
-            if current_wifi == original_wifi:
-                logger.info(f"✅ Successfully reconnected to {original_wifi}")
-                await broadcast_message({
-                    "type": "download_status",
-                    "serial": serial,
-                    "status": "wifi_restored",
-                    "message": f"Reconnected to {original_wifi}. Ready to upload!"
-                })
-            else:
-                logger.warning(f"⚠️  Auto-reconnect failed. Current WiFi: {current_wifi}")
-                logger.warning(f"Please manually reconnect to {original_wifi} to upload files")
+            if not reconnected:
+                logger.warning("⚠️  Auto-reconnect to home WiFi timed out")
+                logger.warning("Please manually reconnect to your WiFi to upload files")
                 await broadcast_message({
                     "type": "download_status",
                     "serial": serial,
                     "status": "wifi_manual_needed",
-                    "message": f"Please manually reconnect to {original_wifi} to upload files"
+                    "message": "Please manually reconnect to your home WiFi to upload files"
                 })
         else:
-            logger.info("Skipping WiFi reconnection (no original WiFi or same as camera WiFi)")
+            logger.info("Skipping WiFi reconnection (was already on GoPro network before download)")
 
         await broadcast_message({
             "type": "download_complete",
@@ -975,6 +1223,129 @@ async def download_from_camera(serial: str, max_files: Optional[int] = None):
         raise HTTPException(status_code=500, detail=error_msg)
 
 
+@app.get("/api/cameras/{serial}/media-summary")
+async def get_media_summary(serial: str):
+    """Get summary of media on camera SD card (file count + total size)"""
+    try:
+        camera = camera_manager.get_camera(serial)
+        if not camera:
+            raise HTTPException(status_code=404, detail=f"Camera {serial} not found")
+
+        if not camera.connected:
+            raise HTTPException(status_code=400, detail=f"Camera {serial} is not connected. Connect via BLE first.")
+
+        if camera.recording:
+            raise HTTPException(status_code=400, detail=f"Camera {serial} is currently recording. Stop recording before erasing.")
+
+        logger.info(f"📊 Getting media summary for camera {serial}")
+
+        # Enable WiFi AP on camera via BLE
+        if camera.connected and camera.gopro and camera.gopro.is_ble_connected:
+            await camera.enable_wifi()
+
+        # Connect to camera WiFi
+        loop = asyncio.get_event_loop()
+        wifi_success = await loop.run_in_executor(
+            None,
+            wifi_manager.connect_wifi,
+            camera.wifi_ssid,
+            camera.wifi_password
+        )
+
+        if not wifi_success:
+            raise HTTPException(status_code=500, detail=f"Failed to connect to camera WiFi: {camera.wifi_ssid}")
+
+        # Get media summary
+        summary = await loop.run_in_executor(None, download_manager.get_media_summary)
+
+        logger.info(f"📊 Media summary for {serial}: {summary['file_count']} files, {summary['total_size_human']}")
+
+        return summary
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Media summary failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/cameras/{serial}/erase-sd")
+async def erase_sd_card(serial: str):
+    """Erase all media from camera SD card. Requires WiFi connection to camera."""
+    try:
+        camera = camera_manager.get_camera(serial)
+        if not camera:
+            raise HTTPException(status_code=404, detail=f"Camera {serial} not found")
+
+        if not camera.connected:
+            raise HTTPException(status_code=400, detail=f"Camera {serial} is not connected. Connect via BLE first.")
+
+        if camera.recording:
+            raise HTTPException(status_code=400, detail=f"Camera {serial} is currently recording. Stop recording before erasing.")
+
+        logger.info("=" * 60)
+        logger.info(f"🗑️  ERASE SD CARD REQUEST for camera {serial}")
+        logger.info("=" * 60)
+
+        # Save current network state
+        loop = asyncio.get_event_loop()
+        on_gopro_already = await loop.run_in_executor(None, wifi_manager.is_on_gopro_network)
+
+        # Enable WiFi AP on camera via BLE
+        if camera.connected and camera.gopro and camera.gopro.is_ble_connected:
+            await camera.enable_wifi()
+
+        # Connect to camera WiFi
+        wifi_success = await loop.run_in_executor(
+            None,
+            wifi_manager.connect_wifi,
+            camera.wifi_ssid,
+            camera.wifi_password
+        )
+
+        if not wifi_success:
+            raise HTTPException(status_code=500, detail=f"Failed to connect to camera WiFi: {camera.wifi_ssid}")
+
+        # Erase all media
+        success = await loop.run_in_executor(None, download_manager.erase_all_media)
+
+        if success:
+            logger.info(f"✅ Successfully erased all media from camera {serial}")
+        else:
+            logger.error(f"❌ Failed to erase media from camera {serial}")
+
+        # Broadcast WebSocket message
+        await broadcast_message({
+            "type": "sd_erased",
+            "serial": serial,
+            "success": success
+        })
+
+        # Reconnect to home WiFi if we weren't already on GoPro network
+        if not on_gopro_already:
+            logger.info("Reconnecting to home WiFi...")
+            await loop.run_in_executor(None, wifi_manager.disconnect)
+
+            for attempt in range(10):
+                await asyncio.sleep(2)
+                current_ip = await loop.run_in_executor(None, wifi_manager.get_current_ip)
+                still_on_gopro = await loop.run_in_executor(None, wifi_manager.is_on_gopro_network)
+                if current_ip and not still_on_gopro:
+                    logger.info(f"✅ Reconnected to home WiFi (IP: {current_ip})")
+                    break
+
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to erase SD card")
+
+        return {"success": True, "message": f"All media erased from camera {serial}"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Erase SD failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/downloads/list")
 async def list_downloaded_files(serial: Optional[str] = None):
     """Get list of downloaded files"""
@@ -986,22 +1357,19 @@ async def list_downloaded_files(serial: Optional[str] = None):
 async def upload_file(upload: UploadModel):
     """Upload a file to S3"""
     try:
-        # Check if we're on GoPro WiFi (no internet)
-        current_wifi = wifi_manager.get_current_wifi()
-        if current_wifi:
-            # Check if current WiFi matches any camera WiFi
-            for camera in camera_manager.cameras.values():
-                if current_wifi == camera.wifi_ssid or camera.wifi_ssid in current_wifi:
-                    logger.warning("=" * 60)
-                    logger.warning(f"⚠️  WARNING: Still connected to GoPro WiFi: {current_wifi}")
-                    logger.warning(f"⚠️  GoPro WiFi has no internet connectivity!")
-                    logger.warning(f"⚠️  You need to disconnect and connect to your home/office WiFi")
-                    logger.warning(f"⚠️  Upload will fail without internet connectivity")
-                    logger.warning("=" * 60)
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Cannot upload while connected to GoPro WiFi ({current_wifi}). Please disconnect and connect to a WiFi network with internet access."
-                    )
+        # Check if we're on GoPro WiFi (no internet) — use IP-based detection for macOS 26+
+        if wifi_manager.is_on_gopro_network():
+            current_wifi = wifi_manager.get_current_wifi() or "GoPro WiFi"
+            logger.warning("=" * 60)
+            logger.warning(f"⚠️  WARNING: Still connected to GoPro WiFi: {current_wifi}")
+            logger.warning(f"⚠️  GoPro WiFi has no internet connectivity!")
+            logger.warning(f"⚠️  You need to disconnect and connect to your home/office WiFi")
+            logger.warning(f"⚠️  Upload will fail without internet connectivity")
+            logger.warning("=" * 60)
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot upload while connected to GoPro WiFi ({current_wifi}). Please disconnect and connect to a WiFi network with internet access."
+            )
 
         file_path = Path(upload.file_path)
         if not file_path.exists():
@@ -1091,88 +1459,18 @@ async def create_and_upload_zip(zip_request: CreateZipModel):
             zip_size_mb = temp_zip_path.stat().st_size / (1024 * 1024)
             logger.info(f"✓ ZIP created: {zip_size_mb:.1f} MB")
 
-            # Upload ZIP to S3
-            logger.info(f"Uploading ZIP to S3...")
-            logger.info(f"Backend URL: {zip_request.backend_url}")
-
-            # Validate backend URL
-            if not zip_request.backend_url or not zip_request.backend_url.startswith('http'):
-                raise ValueError(f"Invalid backend URL: {zip_request.backend_url}")
-
+            # Upload ZIP to S3 via shared helper
             s3_key = f"zips/{zip_filename}"
-            logger.info(f"S3 Key: {s3_key}")
+            logger.info(f"Uploading ZIP to S3 (key: {s3_key})...")
 
-            import httpx
-
-            zip_size_bytes = temp_zip_path.stat().st_size
-
-            # Use presigned URL for large ZIPs (> 32MB)
-            if zip_size_bytes > 32 * 1024 * 1024:
-                logger.info(f"ZIP is > 32MB, using presigned URL method")
-
-                # Step 1: Get presigned upload URL
-                presigned_url = zip_request.backend_url.replace('/upload-file', '/upload-file-presigned')
-                logger.info(f"Step 1: Getting presigned URL from {presigned_url}")
-
-                headers = {"X-API-Key": zip_request.api_key}
-                data = {
-                    "filename": s3_key,
-                    "content_type": "application/zip"
-                }
-
-                async with httpx.AsyncClient(timeout=30.0) as client:
-                    resp = await client.post(presigned_url, headers=headers, data=data)
-                    resp.raise_for_status()
-                    result = resp.json()
-
-                upload_url = result["upload_url"]
-                file_url = result["file_url"]
-                upload_headers = result["instructions"]["headers"]
-                upload_headers["x-ms-blob-type"] = "BlockBlob"  # Required for Azure
-
-                logger.info(f"✓ Got presigned URL")
-                logger.info(f"Step 2: Uploading {zip_size_mb:.1f} MB ZIP directly to Azure storage...")
-
-                # Step 2: Upload directly to Azure blob storage
-                with open(temp_zip_path, 'rb') as f:
-                    file_data = f.read()
-
-                async with httpx.AsyncClient(timeout=1200.0) as client:  # 20 min timeout for large ZIPs
-                    resp = await client.put(upload_url, headers=upload_headers, content=file_data)
-                    resp.raise_for_status()
-
-                logger.info(f"✅ ZIP uploaded successfully (via presigned URL)")
-
-                # Use the file_url from presigned response
-                s3_url = file_url
-
-            else:
-                logger.info(f"ZIP is <= 32MB, using direct upload")
-
-                with open(temp_zip_path, 'rb') as f:
-                    files = {"file": (zip_filename, f, "application/zip")}
-                    data = {"s3Key": s3_key}
-                    headers = {"X-API-Key": zip_request.api_key}
-
-                    logger.info(f"Sending POST request to {zip_request.backend_url}")
-                    logger.info(f"Headers: X-API-Key: {zip_request.api_key[:10]}...")
-                    async with httpx.AsyncClient(timeout=600.0) as client:
-                        resp = await client.post(
-                            zip_request.backend_url,
-                            files=files,
-                            data=data,
-                            headers=headers
-                        )
-                        logger.info(f"Response status: {resp.status_code}")
-                        resp.raise_for_status()
-                        result = resp.json()
-                        logger.info(f"Response data: {result}")
-
-                # Extract URL from response
-                s3_url = result.get("url") or result.get("fileUrl") or result.get("s3Url")
-                if not s3_url:
-                    s3_url = f"https://your-bucket.s3.amazonaws.com/{s3_key}"
-                    logger.warning(f"Backend didn't return URL, using fallback: {s3_url}")
+            s3_url = await download_manager.upload_file_to_backend(
+                temp_zip_path, s3_key,
+                zip_request.backend_url, zip_request.api_key,
+                content_type="application/zip"
+            )
+            if not s3_url:
+                s3_url = f"https://your-bucket.s3.amazonaws.com/{s3_key}"
+                logger.warning(f"Backend didn't return URL, using fallback: {s3_url}")
 
             # Clean up temp file
             temp_zip_path.unlink()
@@ -1274,67 +1572,17 @@ async def upload_camera_bulk(serial: str, upload_data: dict):
                 zip_size_mb = temp_zip_path.stat().st_size / (1024 * 1024)
                 logger.info(f"✓ ZIP created: {zip_size_mb:.1f} MB")
 
-                # Upload ZIP to S3
-                logger.info(f"Uploading {zip_filename} to S3...")
-
+                # Upload ZIP to S3 via shared helper
                 s3_key = f"zips/{zip_filename}"
-                zip_size_bytes = temp_zip_path.stat().st_size
+                logger.info(f"Uploading {zip_filename} to S3 (key: {s3_key})...")
 
-                import httpx
-
-                # Use presigned URL for large ZIPs (> 32MB)
-                if zip_size_bytes > 32 * 1024 * 1024:
-                    logger.info(f"ZIP is > 32MB, using presigned URL method")
-
-                    presigned_url = backend_url.replace('/upload-file', '/upload-file-presigned')
-                    logger.info(f"Getting presigned URL from {presigned_url}")
-
-                    headers = {"X-API-Key": api_key}
-                    data = {
-                        "filename": s3_key,
-                        "content_type": "application/zip"
-                    }
-
-                    async with httpx.AsyncClient(timeout=30.0) as client:
-                        resp = await client.post(presigned_url, headers=headers, data=data)
-                        resp.raise_for_status()
-                        result = resp.json()
-
-                    upload_url = result["upload_url"]
-                    file_url = result["file_url"]
-                    upload_headers = result["instructions"]["headers"]
-                    upload_headers["x-ms-blob-type"] = "BlockBlob"
-
-                    logger.info(f"Uploading {zip_size_mb:.1f} MB directly to storage...")
-
-                    with open(temp_zip_path, 'rb') as f:
-                        file_data = f.read()
-
-                    async with httpx.AsyncClient(timeout=1200.0) as client:
-                        resp = await client.put(upload_url, headers=upload_headers, content=file_data)
-                        resp.raise_for_status()
-
-                    s3_url = file_url
-                    logger.info(f"✅ Uploaded via presigned URL")
-
-                else:
-                    logger.info(f"ZIP is <= 32MB, using direct upload")
-
-                    with open(temp_zip_path, 'rb') as f:
-                        files = {"file": (zip_filename, f, "application/zip")}
-                        data = {"s3Key": s3_key}
-                        headers = {"X-API-Key": api_key}
-
-                        async with httpx.AsyncClient(timeout=600.0) as client:
-                            resp = await client.post(backend_url, files=files, data=data, headers=headers)
-                            resp.raise_for_status()
-                            result = resp.json()
-
-                    s3_url = result.get("url") or result.get("fileUrl") or result.get("s3Url")
-                    if not s3_url:
-                        s3_url = f"https://storage.cloud.com/{s3_key}"
-
-                    logger.info(f"✅ Uploaded directly")
+                s3_url = await download_manager.upload_file_to_backend(
+                    temp_zip_path, s3_key,
+                    backend_url, api_key,
+                    content_type="application/zip"
+                )
+                if not s3_url:
+                    s3_url = f"https://storage.cloud.com/{s3_key}"
 
                 # Clean up temp file
                 temp_zip_path.unlink()
