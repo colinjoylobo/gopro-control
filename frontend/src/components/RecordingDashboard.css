@@ -1,0 +1,598 @@
+.recording-dashboard {
+  max-width: 100%;
+}
+
+/* ============== Top Bar ============== */
+.dashboard-top-bar {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+}
+
+.top-bar-left {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.top-bar-center {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+}
+
+.top-bar-right {
+  display: flex;
+  align-items: center;
+}
+
+.recording-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1.5rem;
+  background: #1a1a1a;
+  border: 2px solid #3a3a3a;
+  border-radius: 12px;
+  transition: all 0.3s ease;
+}
+
+.recording-indicator.active {
+  border-color: #ef4444;
+  background: rgba(239, 68, 68, 0.1);
+  animation: recordingPulse 2s infinite;
+}
+
+@keyframes recordingPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
+  50% { box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); }
+}
+
+.pulse-dot {
+  width: 12px;
+  height: 12px;
+  background: #ef4444;
+  border-radius: 50%;
+  animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.8); }
+}
+
+.status-text {
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: 2px;
+  color: white;
+}
+
+.recording-timer {
+  font-size: 1.5rem;
+  font-weight: 700;
+  font-family: 'Courier New', monospace;
+  color: #ef4444;
+  padding: 0.5rem 1rem;
+  background: rgba(239, 68, 68, 0.1);
+  border-radius: 8px;
+  border: 1px solid #ef4444;
+}
+
+.recording-controls {
+  display: flex;
+  gap: 1rem;
+}
+
+.btn-record, .btn-stop {
+  padding: 0.75rem 1.5rem;
+  font-size: 1rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 180px;
+  justify-content: center;
+}
+
+.btn-record {
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+}
+
+.btn-record.recording {
+  background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+}
+
+.btn-stop {
+  background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+}
+
+.record-icon, .stop-icon {
+  font-size: 1.2rem;
+}
+
+.spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Camera Count Badges */
+.cam-count-badges {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.cam-badge {
+  padding: 0.35rem 0.75rem;
+  border-radius: 16px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.cam-badge.total {
+  background: rgba(102, 126, 234, 0.15);
+  color: #667eea;
+  border: 1px solid rgba(102, 126, 234, 0.3);
+}
+
+.cam-badge.connected {
+  background: rgba(16, 185, 129, 0.15);
+  color: #10b981;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.cam-badge.recording {
+  background: rgba(107, 114, 128, 0.15);
+  color: #6b7280;
+  border: 1px solid rgba(107, 114, 128, 0.3);
+}
+
+.cam-badge.recording.active {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  animation: pulse 1.5s infinite;
+}
+
+/* ============== Shoot Context Bar ============== */
+.shoot-context-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-left: 4px solid #667eea;
+}
+
+.shoot-badges {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.shoot-name-badge {
+  padding: 0.35rem 0.75rem;
+  border: 2px solid #667eea;
+  border-radius: 16px;
+  color: #667eea;
+  font-weight: 700;
+  font-size: 0.9rem;
+  background: rgba(102, 126, 234, 0.1);
+}
+
+.shoot-take-badge {
+  padding: 0.35rem 0.75rem;
+  border: 2px solid #ef4444;
+  border-radius: 16px;
+  color: #ef4444;
+  font-weight: 700;
+  font-size: 0.85rem;
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.shoot-bar-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+/* Compact Shoot Panel */
+.shoot-panel-compact {
+  border-left: 4px solid #667eea;
+}
+
+.create-shoot-row {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.shoot-name-input {
+  flex: 1;
+  padding: 0.5rem 0.75rem;
+  background: #1a1a1a;
+  border: 2px solid #3a3a3a;
+  border-radius: 8px;
+  color: white;
+  font-size: 0.85rem;
+}
+
+.shoot-name-input:focus {
+  border-color: #667eea;
+  outline: none;
+}
+
+.shoot-name-input::placeholder {
+  color: #666;
+}
+
+.shoot-select {
+  padding: 0.5rem 0.75rem;
+  background: #1a1a1a;
+  border: 2px solid #3a3a3a;
+  border-radius: 8px;
+  color: white;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.shoot-select:focus {
+  border-color: #667eea;
+  outline: none;
+}
+
+/* ============== Health Grid ============== */
+.health-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 1rem;
+  margin-top: 0;
+}
+
+.health-card {
+  background: #1e1e1e;
+  border: 2px solid #3a3a3a;
+  border-radius: 12px;
+  padding: 1rem;
+  transition: all 0.3s ease;
+}
+
+.health-card:hover {
+  border-color: #667eea;
+}
+
+.health-card.encoding {
+  border-color: #ef4444;
+  box-shadow: 0 0 12px rgba(239, 68, 68, 0.2);
+}
+
+.health-card.disconnected {
+  opacity: 0.5;
+}
+
+.health-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid #3a3a3a;
+}
+
+.health-cam-name {
+  font-weight: 700;
+  color: white;
+  font-size: 1rem;
+}
+
+.health-cam-serial {
+  display: block;
+  font-size: 0.75rem;
+  color: #888;
+  font-weight: 400;
+}
+
+.health-status-dots {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.recording-dot-pulse {
+  background: #ef4444;
+  animation: pulse 1s infinite;
+}
+
+.thermal-normal {
+  background: #10b981;
+}
+
+.thermal-warm {
+  background: #f59e0b;
+}
+
+.thermal-hot {
+  background: #ef4444;
+  animation: pulse 1s infinite;
+}
+
+.gps-locked {
+  background: #10b981;
+}
+
+.gps-none {
+  background: #555;
+}
+
+.health-disconnected {
+  text-align: center;
+  color: #666;
+  padding: 1rem;
+  font-style: italic;
+}
+
+.health-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+/* Health Rows */
+.health-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.health-label {
+  width: 55px;
+  font-size: 0.75rem;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  flex-shrink: 0;
+}
+
+.health-bar-container {
+  flex: 1;
+  height: 8px;
+  background: #2a2a2a;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.health-bar {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.5s ease;
+}
+
+.storage-bar {
+  background: #667eea;
+}
+
+.health-value {
+  min-width: 45px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  text-align: right;
+}
+
+.health-drain {
+  font-size: 0.7rem;
+  color: #888;
+  min-width: 50px;
+  text-align: right;
+}
+
+/* Recording Row */
+.recording-row {
+  background: rgba(239, 68, 68, 0.1);
+  padding: 0.35rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.health-rec-timer {
+  font-family: 'Courier New', monospace;
+  font-weight: 700;
+  color: #ef4444;
+  font-size: 1rem;
+}
+
+/* Health Badges */
+.health-badges {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  margin-top: 0.25rem;
+}
+
+.health-badge {
+  padding: 0.2rem 0.5rem;
+  border-radius: 10px;
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+.health-badge.ok {
+  background: rgba(16, 185, 129, 0.15);
+  color: #10b981;
+}
+
+.health-badge.error {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+}
+
+.health-badge.info {
+  background: rgba(102, 126, 234, 0.1);
+  color: #667eea;
+}
+
+/* ============== Quick Stats Bar ============== */
+.quick-stats-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.quick-stats {
+  display: flex;
+  gap: 2rem;
+}
+
+.quick-stat {
+  display: flex;
+  flex-direction: column;
+}
+
+.quick-stat-label {
+  font-size: 0.7rem;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.quick-stat-value {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #667eea;
+  font-family: 'Courier New', monospace;
+}
+
+.alerts-section {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.alert-badge {
+  padding: 0.3rem 0.75rem;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.alert-badge.danger {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.alert-badge.warning {
+  background: rgba(245, 158, 11, 0.15);
+  color: #f59e0b;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+/* ============== Take List ============== */
+.take-list {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.take-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5rem 1rem;
+  background: #1a1a1a;
+  border: 1px solid #3a3a3a;
+  border-radius: 6px;
+  font-size: 0.85rem;
+}
+
+.take-item.take-active {
+  border-color: #ef4444;
+  background: rgba(239, 68, 68, 0.05);
+}
+
+.take-item-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.take-number {
+  color: white;
+  font-weight: 600;
+}
+
+.take-cameras {
+  color: #888;
+  font-size: 0.8rem;
+}
+
+.take-item-status {
+  color: #888;
+  font-size: 0.8rem;
+}
+
+.take-item.take-active .take-item-status {
+  color: #ef4444;
+  font-weight: 600;
+}
+
+/* ============== Responsive ============== */
+@media (max-width: 1024px) {
+  .dashboard-top-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .top-bar-left, .top-bar-center, .top-bar-right {
+    justify-content: center;
+  }
+
+  .recording-controls {
+    width: 100%;
+  }
+
+  .btn-record, .btn-stop {
+    flex: 1;
+  }
+}
+
+@media (max-width: 768px) {
+  .health-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .cam-count-badges {
+    justify-content: center;
+  }
+
+  .quick-stats {
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .create-shoot-row {
+    flex-direction: column;
+  }
+
+  .shoot-context-bar {
+    flex-direction: column;
+    gap: 0.75rem;
+    align-items: flex-start;
+  }
+}

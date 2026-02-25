@@ -4,8 +4,10 @@ GoPro Camera Management via BLE
 import asyncio
 import threading
 import time
+from datetime import datetime
 from typing import Dict, List, Optional
 from open_gopro import GoPro, Params
+from open_gopro.constants import StatusId, SettingId
 import logging
 
 logger = logging.getLogger(__name__)
@@ -40,6 +42,8 @@ class CameraInstance:
         self.connected = False
         self.recording = False
         self.battery_level: Optional[int] = None
+        self.recording_start_time: Optional[datetime] = None
+        self.battery_history: list = []  # [(timestamp, percent), ...]
 
     async def connect_ble(self) -> bool:
         """Connect via BLE only, with retry"""
@@ -209,11 +213,13 @@ class CameraInstance:
                         # BLE write likely succeeded but encoding_started wasn't set
                         logger.info(f"[{self.serial}] Shutter sent (encoding wait timed out — likely recording)")
                         self.recording = True
+                        self.recording_start_time = datetime.now()
                         return True
                     elif err:
                         raise err
 
                     self.recording = True
+                    self.recording_start_time = datetime.now()
                     logger.info(f"[{self.serial}] Recording started")
                     return True
                 except Exception as e:
@@ -256,6 +262,7 @@ class CameraInstance:
                         raise err
                     await asyncio.sleep(2)
                     self.recording = False
+                    self.recording_start_time = None
                     logger.info(f"[{self.serial}] Recording stopped")
                     return True
                 except Exception as e:
@@ -265,12 +272,14 @@ class CameraInstance:
 
             # Even if command failed, mark as not recording to allow retry
             self.recording = False
+            self.recording_start_time = None
             logger.error(f"[{self.serial}] Stop recording failed after retries")
             return False
 
         except Exception as e:
             logger.error(f"[{self.serial}] Stop recording failed: {e}")
             self.recording = False
+            self.recording_start_time = None
             return False
 
     async def enable_wifi(self) -> bool:
@@ -372,14 +381,191 @@ class CameraInstance:
             )
             if err:
                 raise Exception(str(err))
-            from open_gopro.constants import StatusId
             level = resp.data.get(StatusId.INT_BATT_PER)
             if level is not None:
                 self.battery_level = int(level)
+                self.battery_history.append((datetime.now(), self.battery_level))
+                # Keep last 60 entries (~1 hour at 60s polling)
+                if len(self.battery_history) > 60:
+                    self.battery_history = self.battery_history[-60:]
                 return self.battery_level
         except Exception as e:
             logger.debug(f"[{self.serial}] Battery query failed: {e}")
         return self.battery_level
+
+    def _calc_battery_drain_rate(self) -> Optional[float]:
+        """Calculate battery drain rate in %/hour from history"""
+        if len(self.battery_history) < 2:
+            return None
+        oldest_time, oldest_level = self.battery_history[0]
+        newest_time, newest_level = self.battery_history[-1]
+        elapsed_hours = (newest_time - oldest_time).total_seconds() / 3600
+        if elapsed_hours < 0.01:  # Less than 36 seconds
+            return None
+        return round((oldest_level - newest_level) / elapsed_hours, 1)
+
+    async def _get_status_value(self, status_accessor) -> Optional[any]:
+        """Safely get a single BLE status value"""
+        try:
+            loop = asyncio.get_event_loop()
+            resp, err = await loop.run_in_executor(
+                None,
+                self._ble_cmd_in_thread,
+                status_accessor.get_value,
+                (),
+                5
+            )
+            if err:
+                return None
+            # Extract value from response data
+            for key, val in resp.data.items():
+                return val
+        except Exception:
+            return None
+
+    async def get_health_status(self) -> dict:
+        """Query all health metrics in one call"""
+        self.update_connection_status()
+        if not self.connected or not self.gopro or not self.gopro.is_ble_connected:
+            return {"error": "Not connected"}
+
+        health = {
+            "serial": self.serial,
+            "name": self.name,
+            "connected": self.connected,
+            "recording": self.recording,
+        }
+
+        async def _safe_status(attr_name, default=None):
+            """Safely read a BLE status attribute, returning default if attr doesn't exist"""
+            try:
+                attr = getattr(self.gopro.ble_status, attr_name, None)
+                if attr is None:
+                    return default
+                return await self._get_status_value(attr)
+            except Exception:
+                return default
+
+        # Battery (use cached + refresh)
+        battery = await _safe_status("int_batt_per")
+        if battery is not None:
+            self.battery_level = int(battery)
+            self.battery_history.append((datetime.now(), self.battery_level))
+            if len(self.battery_history) > 60:
+                self.battery_history = self.battery_history[-60:]
+        health["battery_percent"] = self.battery_level
+        health["battery_drain_rate"] = self._calc_battery_drain_rate()
+
+        # Storage
+        health["storage_remaining_kb"] = await _safe_status("space_rem")
+        health["video_remaining_min"] = await _safe_status("video_rem")
+        sd_raw = await _safe_status("sd_status")
+        health["sd_status"] = str(sd_raw) if sd_raw is not None else None
+
+        # Recording
+        health["recording_duration_sec"] = await _safe_status("video_progress")
+        encoding_raw = await _safe_status("encoding")
+        health["is_encoding"] = bool(encoding_raw) if encoding_raw is not None else self.recording
+
+        # Thermal
+        hot_raw = await _safe_status("system_hot")
+        health["system_hot"] = bool(hot_raw) if hot_raw is not None else False
+        cold_raw = await _safe_status("video_low_temp")
+        health["too_cold"] = bool(cold_raw) if cold_raw is not None else False
+        thermal_raw = await _safe_status("thermal_mit_mode")
+        health["thermal_mitigation"] = bool(thermal_raw) if thermal_raw is not None else False
+
+        # GPS
+        gps_raw = await _safe_status("gps_stat")
+        health["gps_lock"] = bool(gps_raw) if gps_raw is not None else False
+
+        # Media counts
+        health["num_videos"] = await _safe_status("num_total_video")
+        health["num_photos"] = await _safe_status("num_total_photo")
+
+        # Orientation
+        orient_raw = await _safe_status("orientation")
+        health["orientation"] = str(orient_raw) if orient_raw is not None else None
+
+        return health
+
+    async def get_current_settings(self) -> dict:
+        """Read current camera settings for preset capture"""
+        self.update_connection_status()
+        if not self.connected or not self.gopro or not self.gopro.is_ble_connected:
+            return {"error": "Not connected"}
+
+        settings = {}
+        setting_map = {
+            "resolution": self.gopro.ble_setting.resolution,
+            "fps": self.gopro.ble_setting.fps,
+            "video_fov": self.gopro.ble_setting.video_field_of_view,
+            "hypersmooth": self.gopro.ble_setting.hypersmooth,
+            "anti_flicker": self.gopro.ble_setting.anti_flicker,
+        }
+
+        for name, setting in setting_map.items():
+            try:
+                loop = asyncio.get_event_loop()
+                resp, err = await loop.run_in_executor(
+                    None,
+                    self._ble_cmd_in_thread,
+                    setting.get_value,
+                    (),
+                    5
+                )
+                if not err and resp and resp.data:
+                    for key, val in resp.data.items():
+                        settings[name] = str(val.name) if hasattr(val, 'name') else str(val)
+                        break
+                else:
+                    settings[name] = None
+            except Exception as e:
+                logger.debug(f"[{self.serial}] Failed to read setting {name}: {e}")
+                settings[name] = None
+
+        return settings
+
+    async def apply_settings(self, settings: dict) -> dict:
+        """Apply a preset's settings to this camera"""
+        self.update_connection_status()
+        if not self.connected or not self.gopro or not self.gopro.is_ble_connected:
+            return {"error": "Not connected"}
+
+        results = {}
+        setting_map = {
+            "resolution": (self.gopro.ble_setting.resolution, Params.Resolution),
+            "fps": (self.gopro.ble_setting.fps, Params.FPS),
+            "video_fov": (self.gopro.ble_setting.video_field_of_view, Params.VideoFOV),
+            "hypersmooth": (self.gopro.ble_setting.hypersmooth, Params.HypersmoothMode),
+            "anti_flicker": (self.gopro.ble_setting.anti_flicker, Params.AntiFlicker),
+        }
+
+        for name, value_str in settings.items():
+            if name not in setting_map or value_str is None:
+                continue
+            setting_accessor, params_enum = setting_map[name]
+            try:
+                # Look up the enum value by name
+                param_value = params_enum[value_str]
+                loop = asyncio.get_event_loop()
+                _, err = await loop.run_in_executor(
+                    None,
+                    self._ble_cmd_in_thread,
+                    setting_accessor.set,
+                    (param_value,),
+                    10
+                )
+                if err and err != "timeout":
+                    results[name] = f"error: {err}"
+                else:
+                    results[name] = "ok"
+            except (KeyError, ValueError) as e:
+                results[name] = f"invalid value: {value_str}"
+            except Exception as e:
+                results[name] = f"error: {e}"
+
+        return results
 
     def update_connection_status(self) -> bool:
         """Check and update actual connection status from gopro object"""
@@ -645,6 +831,26 @@ class CameraManager:
                     results[serial] = await camera.stop_webcam()
                 except Exception as e:
                     results[serial] = False
+        return results
+
+    async def get_all_health(self) -> dict:
+        """Get health for all connected cameras — sequential for BLE stability"""
+        results = {}
+        for serial, camera in self.cameras.items():
+            if camera.connected:
+                try:
+                    results[serial] = await camera.get_health_status()
+                except Exception as e:
+                    logger.error(f"[{serial}] Health query failed: {e}")
+                    results[serial] = {"error": str(e), "serial": serial, "name": camera.name}
+            else:
+                results[serial] = {
+                    "serial": serial,
+                    "name": camera.name,
+                    "connected": False,
+                    "recording": False,
+                    "battery_percent": camera.battery_level,
+                }
         return results
 
     async def get_all_battery_levels(self) -> Dict[str, Optional[int]]:

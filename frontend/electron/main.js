@@ -94,17 +94,18 @@ async function startBackend() {
       ? path.join(backendDir, 'venv', 'Scripts', 'python.exe')
       : path.join(backendDir, 'venv', 'bin', 'python3');
 
-    if (!fs.existsSync(venvPython)) {
-      // Try 'python' instead of 'python3'
+    if (fs.existsSync(venvPython)) {
+      backendExecutable = venvPython;
+    } else {
+      // Try 'python' instead of 'python3' in venv
       const venvPythonAlt = path.join(backendDir, 'venv', 'bin', 'python');
       if (fs.existsSync(venvPythonAlt)) {
         backendExecutable = venvPythonAlt;
       } else {
-        log(`ERROR: Python not found at ${venvPython} or ${venvPythonAlt}`);
-        return;
+        // Fallback to system python3
+        log('No venv found, falling back to system python3');
+        backendExecutable = 'python3';
       }
-    } else {
-      backendExecutable = venvPython;
     }
     backendArgs = ['main.py'];
   }

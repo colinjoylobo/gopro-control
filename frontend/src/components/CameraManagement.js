@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import axios from 'axios';
+import PresetManager from './PresetManager';
 import './CameraManagement.css';
 
 function CameraManagement({ cameras, onCamerasUpdate, apiUrl }) {
@@ -390,7 +391,11 @@ function CameraManagement({ cameras, onCamerasUpdate, apiUrl }) {
           </div>
         ) : (
           <div className="cameras-grid">
-            {cameras.map((camera) => (
+            {[...cameras].sort((a, b) => {
+              if (a.connected && !b.connected) return -1;
+              if (!a.connected && b.connected) return 1;
+              return 0;
+            }).map((camera) => (
               <div key={camera.serial} className="camera-card">
                 <div className="camera-header">
                   <div>
@@ -491,6 +496,9 @@ function CameraManagement({ cameras, onCamerasUpdate, apiUrl }) {
           </div>
         </div>
       )}
+      {/* Preset Management */}
+      <PresetManager cameras={cameras} apiUrl={apiUrl} />
+
       {eraseModal && (
         <div className="erase-modal-overlay" onClick={() => { if (!erasing) { setEraseModal(null); setEraseConfirmText(''); } }}>
           <div className="erase-modal" onClick={(e) => e.stopPropagation()}>

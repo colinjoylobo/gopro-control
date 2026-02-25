@@ -2,17 +2,28 @@
 FastAPI Backend for GoPro Desktop App
 """
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional, Dict
 import asyncio
+import ssl
+import tempfile
+import base64
 import logging
 from pathlib import Path
+
+import httpx
+import subprocess
+import shutil
+import signal
 
 from camera_manager import CameraManager
 from wifi_manager import WiFiManager
 from download_manager import DownloadManager
 from shoot_manager import ShootManager
+from preset_manager import PresetManager
+from cohn_manager import COHNManager
 
 # Setup logging
 logging.basicConfig(
@@ -38,6 +49,17 @@ camera_manager = CameraManager()
 wifi_manager = WiFiManager()
 download_manager = DownloadManager()
 shoot_manager = ShootManager()
+preset_manager = PresetManager()
+cohn_manager = COHNManager()
+CERT_DIR = Path(tempfile.gettempdir()) / "gopro_cohn_certs"
+
+# COHN UDP-to-HLS relay: single UDP listener demuxes by source IP, pipes to per-camera ffmpeg
+HLS_OUTPUT_DIR = Path(tempfile.gettempdir()) / "gopro_cohn_hls"
+_cohn_ffmpeg_procs: Dict[str, subprocess.Popen] = {}  # serial -> ffmpeg process (stdin pipe)
+_cohn_ip_to_serial: Dict[str, str] = {}  # camera IP -> serial (for UDP demux)
+_cohn_udp_server = None  # asyncio DatagramProtocol instance
+_cohn_udp_lock = asyncio.Lock()  # prevent race when multiple previews start concurrently
+_COHN_UDP_PORT = 8554
 
 # WebSocket connections for real-time updates
 websocket_connections: List[WebSocket] = []
@@ -83,6 +105,29 @@ class SetActiveShootModel(BaseModel):
     shoot_id: str
 
 
+class PresetCreateModel(BaseModel):
+    name: str
+    settings: dict
+
+
+class PresetApplyModel(BaseModel):
+    serials: Optional[List[str]] = None  # None = apply to all connected
+
+
+class COHNProvisionModel(BaseModel):
+    wifi_ssid: str
+    wifi_password: str
+
+
+class SelectedFileModel(BaseModel):
+    directory: str
+    filename: str
+
+
+class SelectedDownloadModel(BaseModel):
+    files: List[SelectedFileModel]
+
+
 # ============== WebSocket ==============
 
 @app.websocket("/ws")
@@ -114,6 +159,9 @@ async def connection_monitor():
     # Track previous state
     previous_states = {}
     battery_poll_counter = 0
+    health_poll_counter = 0
+    cohn_poll_counter = 0
+    previous_cohn_online = {}
 
     logger.info("🔄 Connection monitor started - checking every 0.5 seconds")
 
@@ -156,6 +204,53 @@ async def connection_monitor():
                         })
                 except Exception as e:
                     logger.debug(f"Battery poll error: {e}")
+
+            # Broadcast health data every 15 seconds (30 iterations * 0.5s = 15s)
+            health_poll_counter += 1
+            if health_poll_counter >= 30:
+                health_poll_counter = 0
+                if websocket_connections:
+                    try:
+                        health_data = await camera_manager.get_all_health()
+                        await broadcast_message({
+                            "type": "health_update",
+                            "cameras": health_data
+                        })
+                    except Exception as e:
+                        logger.debug(f"Health poll error: {e}")
+
+            # Poll COHN cameras every 30 seconds (60 * 0.5s) - also serves as keep-alive
+            cohn_poll_counter += 1
+            if cohn_poll_counter >= 60:
+                cohn_poll_counter = 0
+                if cohn_manager.credentials:
+                    try:
+                        cohn_online = await cohn_manager.check_all_cameras()
+                        for serial, online in cohn_online.items():
+                            prev = previous_cohn_online.get(serial)
+                            if prev is None or prev != online:
+                                previous_cohn_online[serial] = online
+                                if websocket_connections:
+                                    await broadcast_message({
+                                        "type": "cohn_camera_online" if online else "cohn_camera_offline",
+                                        "serial": serial,
+                                        "online": online
+                                    })
+                        # Send keep-alive to online cameras
+                        for serial, is_online in cohn_online.items():
+                            if is_online:
+                                creds = cohn_manager.get_credentials(serial)
+                                if creds:
+                                    ip = creds.get("ip_address")
+                                    auth = cohn_manager.get_auth_header(serial)
+                                    try:
+                                        async with httpx.AsyncClient(verify=False, timeout=3.0) as kc:
+                                            await kc.get(f"https://{ip}/gopro/camera/keep_alive",
+                                                        headers={"Authorization": auth} if auth else {})
+                                    except Exception:
+                                        pass
+                    except Exception as e:
+                        logger.debug(f"COHN poll error: {e}")
 
             # Wait 0.5 seconds before next check (checks 2x per second)
             await asyncio.sleep(0.5)
@@ -435,6 +530,36 @@ async def disconnect_all_cameras():
         await camera_manager.disconnect_all()
         return {"success": True, "message": "All cameras disconnected"}
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/cameras/disconnect/{serial}")
+async def disconnect_single_camera(serial: str):
+    """Disconnect a single camera via BLE"""
+    try:
+        if serial not in camera_manager.cameras:
+            raise HTTPException(status_code=404, detail=f"Camera {serial} not found")
+
+        camera = camera_manager.cameras[serial]
+        logger.info(f"Disconnecting camera: {serial}")
+
+        await camera.disconnect()
+
+        await broadcast_message({
+            "type": "camera_connection",
+            "serial": serial,
+            "connected": False
+        })
+
+        return {
+            "success": True,
+            "serial": serial,
+            "connected": False
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Disconnect camera {serial} failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1223,6 +1348,278 @@ async def download_from_camera(serial: str, max_files: Optional[int] = None, sho
         raise HTTPException(status_code=500, detail=error_msg)
 
 
+@app.post("/api/download/{serial}/latest")
+async def download_latest_from_camera(serial: str, shoot_name: Optional[str] = None, take_number: Optional[int] = None):
+    """Download only the latest video from a camera"""
+    try:
+        logger.info("=" * 60)
+        logger.info(f"DOWNLOAD LATEST VIDEO REQUEST for camera {serial}")
+
+        camera = camera_manager.get_camera(serial)
+        if not camera:
+            raise HTTPException(status_code=404, detail="Camera not found")
+
+        loop = asyncio.get_event_loop()
+        on_gopro_already = await loop.run_in_executor(None, wifi_manager.is_on_gopro_network)
+
+        # Enable WiFi AP on camera via BLE
+        if camera.connected and camera.gopro and camera.gopro.is_ble_connected:
+            await camera.enable_wifi()
+
+        # Connect to camera WiFi
+        await broadcast_message({
+            "type": "download_status",
+            "serial": serial,
+            "status": "connecting_wifi",
+            "message": f"Connecting to {camera.wifi_ssid}..."
+        })
+
+        wifi_success = await loop.run_in_executor(
+            None, wifi_manager.connect_wifi, camera.wifi_ssid, camera.wifi_password
+        )
+
+        if not wifi_success:
+            error_msg = f"Failed to connect to camera WiFi: {camera.wifi_ssid}"
+            await broadcast_message({"type": "download_error", "serial": serial, "error": error_msg})
+            raise HTTPException(status_code=500, detail=error_msg)
+
+        await broadcast_message({
+            "type": "download_status",
+            "serial": serial,
+            "status": "wifi_connected",
+            "message": f"Connected to {camera.wifi_ssid}, downloading latest video..."
+        })
+
+        def progress_callback(filename: str, current: int, total: int, percent: int):
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    broadcast_message({
+                        "type": "download_progress",
+                        "serial": serial,
+                        "filename": filename,
+                        "current_file": current,
+                        "total_files": total,
+                        "percent": percent
+                    }),
+                    loop
+                )
+            except Exception as e:
+                logger.warning(f"Could not broadcast progress: {e}")
+
+        from functools import partial
+        download_func = partial(
+            download_manager.download_latest_from_camera,
+            serial, progress_callback,
+            shoot_name=shoot_name, take_number=take_number
+        )
+        downloaded_files = await loop.run_in_executor(None, download_func)
+
+        # Reconnect to home WiFi
+        if not on_gopro_already:
+            await loop.run_in_executor(None, wifi_manager.disconnect)
+            for attempt in range(10):
+                await asyncio.sleep(2)
+                current_ip = await loop.run_in_executor(None, wifi_manager.get_current_ip)
+                still_on_gopro = await loop.run_in_executor(None, wifi_manager.is_on_gopro_network)
+                if current_ip and not still_on_gopro:
+                    break
+
+        await broadcast_message({
+            "type": "download_complete",
+            "serial": serial,
+            "files_count": len(downloaded_files)
+        })
+
+        return {
+            "success": True,
+            "files_count": len(downloaded_files),
+            "files": [str(f) for f in downloaded_files]
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        error_msg = f"Download latest failed: {str(e)}"
+        logger.error(f"{error_msg}", exc_info=True)
+        await broadcast_message({"type": "download_error", "serial": serial, "error": error_msg})
+        raise HTTPException(status_code=500, detail=error_msg)
+
+
+@app.post("/api/download/{serial}/selected")
+async def download_selected_from_camera(serial: str, selection: SelectedDownloadModel):
+    """Download selected files from a camera"""
+    try:
+        logger.info("=" * 60)
+        logger.info(f"SELECTIVE DOWNLOAD REQUEST for camera {serial}: {len(selection.files)} files")
+
+        camera = camera_manager.get_camera(serial)
+        if not camera:
+            raise HTTPException(status_code=404, detail="Camera not found")
+
+        loop = asyncio.get_event_loop()
+        on_gopro_already = await loop.run_in_executor(None, wifi_manager.is_on_gopro_network)
+
+        # Enable WiFi AP on camera via BLE
+        if camera.connected and camera.gopro and camera.gopro.is_ble_connected:
+            await camera.enable_wifi()
+
+        # Connect to camera WiFi
+        await broadcast_message({
+            "type": "download_status",
+            "serial": serial,
+            "status": "connecting_wifi",
+            "message": f"Connecting to {camera.wifi_ssid}..."
+        })
+
+        wifi_success = await loop.run_in_executor(
+            None, wifi_manager.connect_wifi, camera.wifi_ssid, camera.wifi_password
+        )
+
+        if not wifi_success:
+            error_msg = f"Failed to connect to camera WiFi: {camera.wifi_ssid}"
+            await broadcast_message({"type": "download_error", "serial": serial, "error": error_msg})
+            raise HTTPException(status_code=500, detail=error_msg)
+
+        await broadcast_message({
+            "type": "download_status",
+            "serial": serial,
+            "status": "wifi_connected",
+            "message": f"Connected. Downloading {len(selection.files)} selected file(s)..."
+        })
+
+        file_list = [{"directory": f.directory, "filename": f.filename} for f in selection.files]
+
+        def progress_callback(filename: str, current: int, total: int, percent: int):
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    broadcast_message({
+                        "type": "download_progress",
+                        "serial": serial,
+                        "filename": filename,
+                        "current_file": current,
+                        "total_files": total,
+                        "percent": percent
+                    }),
+                    loop
+                )
+            except Exception as e:
+                logger.warning(f"Could not broadcast progress: {e}")
+
+        downloaded_files = await loop.run_in_executor(
+            None,
+            download_manager.download_selected_from_camera,
+            serial, file_list, progress_callback
+        )
+
+        # Reconnect to home WiFi
+        if not on_gopro_already:
+            await loop.run_in_executor(None, wifi_manager.disconnect)
+            for attempt in range(10):
+                await asyncio.sleep(2)
+                current_ip = await loop.run_in_executor(None, wifi_manager.get_current_ip)
+                still_on_gopro = await loop.run_in_executor(None, wifi_manager.is_on_gopro_network)
+                if current_ip and not still_on_gopro:
+                    break
+
+        await broadcast_message({
+            "type": "download_complete",
+            "serial": serial,
+            "files_count": len(downloaded_files)
+        })
+
+        return {
+            "success": True,
+            "files_count": len(downloaded_files),
+            "files": [str(f) for f in downloaded_files]
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        error_msg = f"Selected download failed: {str(e)}"
+        logger.error(f"{error_msg}", exc_info=True)
+        await broadcast_message({"type": "download_error", "serial": serial, "error": error_msg})
+        raise HTTPException(status_code=500, detail=error_msg)
+
+
+@app.post("/api/browse/{serial}")
+async def browse_camera(serial: str):
+    """Browse media files on a camera SD card (scan and return full file list)"""
+    try:
+        logger.info("=" * 60)
+        logger.info(f"BROWSE REQUEST for camera {serial}")
+
+        camera = camera_manager.get_camera(serial)
+        if not camera:
+            raise HTTPException(status_code=404, detail="Camera not found")
+
+        loop = asyncio.get_event_loop()
+        on_gopro_already = await loop.run_in_executor(None, wifi_manager.is_on_gopro_network)
+
+        # Enable WiFi AP on camera via BLE
+        if camera.connected and camera.gopro and camera.gopro.is_ble_connected:
+            await camera.enable_wifi()
+
+        await broadcast_message({
+            "type": "browse_status",
+            "serial": serial,
+            "status": "connecting_wifi",
+            "message": f"Connecting to {camera.wifi_ssid}..."
+        })
+
+        wifi_success = await loop.run_in_executor(
+            None, wifi_manager.connect_wifi, camera.wifi_ssid, camera.wifi_password
+        )
+
+        if not wifi_success:
+            error_msg = f"Failed to connect to camera WiFi: {camera.wifi_ssid}"
+            await broadcast_message({"type": "browse_status", "serial": serial, "status": "error", "message": error_msg})
+            raise HTTPException(status_code=500, detail=error_msg)
+
+        await broadcast_message({
+            "type": "browse_status",
+            "serial": serial,
+            "status": "scanning",
+            "message": "Scanning camera media..."
+        })
+
+        summary = await loop.run_in_executor(None, download_manager.get_media_summary)
+
+        logger.info(f"Found {summary['total_files']} files ({summary['total_size_human']})")
+
+        # Reconnect to home WiFi
+        if not on_gopro_already:
+            await broadcast_message({
+                "type": "browse_status",
+                "serial": serial,
+                "status": "reconnecting_wifi",
+                "message": "Reconnecting to home WiFi..."
+            })
+            await loop.run_in_executor(None, wifi_manager.disconnect)
+            for attempt in range(10):
+                await asyncio.sleep(2)
+                current_ip = await loop.run_in_executor(None, wifi_manager.get_current_ip)
+                still_on_gopro = await loop.run_in_executor(None, wifi_manager.is_on_gopro_network)
+                if current_ip and not still_on_gopro:
+                    break
+
+        await broadcast_message({
+            "type": "browse_complete",
+            "serial": serial,
+            "summary": summary
+        })
+
+        return {"success": True, "serial": serial, "summary": summary}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        error_msg = f"Browse failed: {str(e)}"
+        logger.error(f"{error_msg}", exc_info=True)
+        await broadcast_message({"type": "browse_status", "serial": serial, "status": "error", "message": error_msg})
+        raise HTTPException(status_code=500, detail=error_msg)
+
+
 @app.get("/api/cameras/{serial}/media-summary")
 async def get_media_summary(serial: str):
     """Get summary of media on camera SD card (file count + total size)"""
@@ -1505,6 +1902,799 @@ async def create_and_upload_zip(zip_request: CreateZipModel):
     except Exception as e:
         logger.error(f"❌ ZIP creation failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============== Camera Health Dashboard ==============
+
+@app.get("/api/health/dashboard")
+async def get_health_dashboard():
+    """Get health status for all cameras"""
+    try:
+        health_data = await camera_manager.get_all_health()
+        return {"cameras": health_data}
+    except Exception as e:
+        logger.error(f"Health dashboard failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/health/{serial}")
+async def get_camera_health(serial: str):
+    """Get detailed health for a single camera"""
+    try:
+        camera = camera_manager.get_camera(serial)
+        if not camera:
+            raise HTTPException(status_code=404, detail=f"Camera {serial} not found")
+        health = await camera.get_health_status()
+        return health
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Camera health failed for {serial}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============== Preset Management ==============
+
+@app.get("/api/presets")
+async def list_presets():
+    """List all saved presets"""
+    return {"presets": preset_manager.list_presets()}
+
+
+@app.post("/api/presets")
+async def create_preset(preset: PresetCreateModel):
+    """Create or update a preset"""
+    try:
+        saved = preset_manager.save_preset(preset.name, preset.settings)
+        return {"success": True, "preset": {preset.name: saved}}
+    except Exception as e:
+        logger.error(f"Create preset failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/presets/capture/{serial}")
+async def capture_preset(serial: str, body: dict):
+    """Capture current settings from a camera as a new preset"""
+    try:
+        camera = camera_manager.get_camera(serial)
+        if not camera:
+            raise HTTPException(status_code=404, detail=f"Camera {serial} not found")
+        if not camera.connected:
+            raise HTTPException(status_code=400, detail=f"Camera {serial} not connected")
+
+        name = body.get("name", f"Captured from {camera.name}")
+        settings = await camera.get_current_settings()
+        if "error" in settings:
+            raise HTTPException(status_code=500, detail=settings["error"])
+
+        saved = preset_manager.save_preset(name, settings)
+        return {"success": True, "name": name, "preset": saved}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Capture preset failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/presets/{name}/apply")
+async def apply_preset(name: str, body: PresetApplyModel):
+    """Apply a preset to one or more cameras"""
+    try:
+        preset = preset_manager.get_preset(name)
+        if not preset:
+            raise HTTPException(status_code=404, detail=f"Preset '{name}' not found")
+
+        # Extract only the setting keys (exclude metadata like created_at)
+        setting_keys = {"resolution", "fps", "video_fov", "hypersmooth", "anti_flicker"}
+        settings = {k: v for k, v in preset.items() if k in setting_keys}
+
+        # Determine target cameras
+        if body.serials:
+            targets = [(s, camera_manager.get_camera(s)) for s in body.serials]
+            targets = [(s, c) for s, c in targets if c and c.connected]
+        else:
+            targets = [(s, c) for s, c in camera_manager.cameras.items() if c.connected]
+
+        if not targets:
+            raise HTTPException(status_code=400, detail="No connected cameras to apply preset to")
+
+        results = {}
+        for serial, camera in targets:
+            try:
+                result = await camera.apply_settings(settings)
+                results[serial] = result
+            except Exception as e:
+                results[serial] = {"error": str(e)}
+
+        return {"success": True, "results": results}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Apply preset failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/presets/{name}")
+async def delete_preset(name: str):
+    """Delete a preset"""
+    success = preset_manager.delete_preset(name)
+    if not success:
+        raise HTTPException(status_code=404, detail=f"Preset '{name}' not found")
+    return {"success": True, "message": f"Preset '{name}' deleted"}
+
+
+# ============== COHN Settings (HTTP-based, works over network) ==============
+
+# GoPro setting ID → name mapping, and name → value → option ID mapping
+GOPRO_SETTING_IDS = {
+    "resolution": 2,
+    "fps": 3,
+    "video_fov": 121,    # Video Digital Lens
+    "hypersmooth": 135,
+    "anti_flicker": 134,
+    "gps": 83,
+}
+
+# Maps friendly enum names to GoPro numeric option values
+GOPRO_SETTING_VALUES = {
+    "resolution": {
+        "RES_4K": 1, "RES_2_7K": 4, "RES_2_7K_4_3": 6, "RES_1080": 9,
+        "RES_4K_4_3": 18, "RES_5_3K": 100, "RES_5_3K_4_3": 107,
+        "RES_4K_9_16": 111, "RES_1080_9_16": 112,
+        # Friendly aliases
+        "4K": 1, "2.7K": 4, "2.7K 4:3": 6, "1080": 9, "1080p": 9,
+        "4K 4:3": 18, "5.3K": 100, "5.3K 4:3": 107,
+    },
+    "fps": {
+        "FPS_240": 0, "FPS_120": 1, "FPS_100": 2, "FPS_60": 5,
+        "FPS_50": 6, "FPS_30": 8, "FPS_25": 9, "FPS_24": 10, "FPS_200": 13,
+        # Friendly aliases
+        "240": 0, "120": 1, "100": 2, "60": 5, "50": 6,
+        "30": 8, "25": 9, "24": 10, "200": 13,
+    },
+    "video_fov": {
+        "WIDE": 0, "LINEAR": 4, "NARROW": 2, "SUPERVIEW": 3,
+        "LINEAR_HORIZON_LEVELING": 8, "HYPERVIEW": 9, "LINEAR_HORIZON_LOCK": 10,
+        "Wide": 0, "Linear": 4, "Narrow": 2, "SuperView": 3,
+    },
+    "hypersmooth": {
+        "OFF": 0, "ON": 1, "HIGH": 2, "BOOST": 3, "AUTO_BOOST": 4, "STANDARD": 100,
+        "Off": 0, "On": 1, "High": 2, "Boost": 3, "AutoBoost": 4,
+    },
+    "anti_flicker": {
+        "NTSC": 0, "PAL": 1,
+        "60HZ": 0, "50HZ": 1,
+        "60Hz": 0, "50Hz": 1,
+    },
+    "gps": {
+        "OFF": 0, "ON": 1,
+        "Off": 0, "On": 1, "0": 0, "1": 1,
+    },
+}
+
+
+async def _cohn_http_get(ip: str, auth_header: str, path: str, timeout: float = 10.0) -> httpx.Response:
+    """Make an authenticated HTTPS GET to a COHN camera"""
+    headers = {"Authorization": auth_header} if auth_header else {}
+    async with httpx.AsyncClient(verify=False, timeout=timeout) as client:
+        return await client.get(f"https://{ip}{path}", headers=headers)
+
+
+async def _cohn_set_setting(ip: str, auth_header: str, setting_name: str, value_str: str) -> dict:
+    """Set a camera setting via COHN HTTPS"""
+    setting_id = GOPRO_SETTING_IDS.get(setting_name)
+    if setting_id is None:
+        return {"error": f"Unknown setting: {setting_name}"}
+
+    values_map = GOPRO_SETTING_VALUES.get(setting_name, {})
+    option = values_map.get(value_str)
+    if option is None:
+        try:
+            option = int(value_str)
+        except ValueError:
+            return {"error": f"Unknown value '{value_str}' for {setting_name}"}
+
+    try:
+        resp = await _cohn_http_get(ip, auth_header,
+            f"/gopro/camera/setting?setting={setting_id}&option={option}")
+        if resp.status_code == 200:
+            return {"success": True, "setting": setting_name, "value": value_str}
+        else:
+            return {"error": f"HTTP {resp.status_code}: {resp.text}"}
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}
+
+
+async def _cohn_get_state(ip: str, auth_header: str) -> dict:
+    """Get camera state via COHN HTTPS"""
+    try:
+        resp = await _cohn_http_get(ip, auth_header, "/gopro/camera/state")
+        if resp.status_code == 200:
+            return resp.json()
+        return {"error": f"HTTP {resp.status_code}"}
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}
+
+
+@app.post("/api/cohn/settings/apply")
+async def cohn_apply_settings(body: dict):
+    """Apply settings to all COHN cameras via HTTPS (no BLE needed)"""
+    settings = body.get("settings", {})
+    serials = body.get("serials")  # Optional: specific cameras, else all provisioned
+
+    all_creds = cohn_manager.get_all_credentials()
+    if serials:
+        targets = {s: all_creds[s] for s in serials if s in all_creds}
+    else:
+        targets = all_creds
+
+    if not targets:
+        raise HTTPException(status_code=400, detail="No provisioned cameras")
+
+    results = {}
+    for serial, creds in targets.items():
+        ip = creds.get("ip_address")
+        auth = cohn_manager.get_auth_header(serial)
+        if not ip:
+            results[serial] = {"error": "No IP"}
+            continue
+
+        cam_results = {}
+        for setting_name, value_str in settings.items():
+            cam_results[setting_name] = await _cohn_set_setting(ip, auth, setting_name, str(value_str))
+        results[serial] = cam_results
+
+    return {"results": results}
+
+
+@app.post("/api/cohn/gps/enable")
+async def cohn_enable_gps():
+    """Enable GPS on all COHN cameras"""
+    all_creds = cohn_manager.get_all_credentials()
+    results = {}
+    for serial, creds in all_creds.items():
+        ip = creds.get("ip_address")
+        auth = cohn_manager.get_auth_header(serial)
+        if ip:
+            results[serial] = await _cohn_set_setting(ip, auth, "gps", "ON")
+        else:
+            results[serial] = {"error": "No IP"}
+    return {"results": results}
+
+
+@app.get("/api/cohn/camera/state/{serial}")
+async def cohn_get_camera_state(serial: str):
+    """Get full camera state via COHN HTTPS"""
+    creds = cohn_manager.get_credentials(serial)
+    if not creds:
+        raise HTTPException(status_code=404, detail="Camera not provisioned")
+    ip = creds.get("ip_address")
+    auth = cohn_manager.get_auth_header(serial)
+    return await _cohn_get_state(ip, auth)
+
+
+@app.post("/api/presets/{name}/apply-cohn")
+async def apply_preset_cohn(name: str, body: dict = {}):
+    """Apply a preset to COHN cameras via HTTPS (no BLE needed)"""
+    preset = preset_manager.get_preset(name)
+    if not preset:
+        raise HTTPException(status_code=404, detail=f"Preset '{name}' not found")
+
+    setting_keys = {"resolution", "fps", "video_fov", "hypersmooth", "anti_flicker"}
+    settings = {k: v for k, v in preset.items() if k in setting_keys and v is not None}
+
+    serials = body.get("serials")
+    all_creds = cohn_manager.get_all_credentials()
+    targets = {s: all_creds[s] for s in serials if s in all_creds} if serials else all_creds
+
+    if not targets:
+        raise HTTPException(status_code=400, detail="No provisioned cameras")
+
+    results = {}
+    for serial, creds in targets.items():
+        ip = creds.get("ip_address")
+        auth = cohn_manager.get_auth_header(serial)
+        if not ip:
+            results[serial] = {"error": "No IP"}
+            continue
+        cam_results = {}
+        for setting_name, value_str in settings.items():
+            cam_results[setting_name] = await _cohn_set_setting(ip, auth, setting_name, str(value_str))
+        results[serial] = cam_results
+
+    return {"success": True, "results": results}
+
+
+# ============== COHN (Camera on Home Network) ==============
+
+def _get_cohn_ssl_context(creds: dict, serial: str):
+    """Build SSL context for GoPro COHN cameras (self-signed certs, skip verification)"""
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
+
+class _CohnUdpDemuxer(asyncio.DatagramProtocol):
+    """Single UDP listener on port 8554 that demuxes packets by source IP to per-camera ffmpeg"""
+
+    _log_counter = 0
+
+    def datagram_received(self, data, addr):
+        src_ip = addr[0]
+        _CohnUdpDemuxer._log_counter += 1
+        if _CohnUdpDemuxer._log_counter <= 5:
+            logger.info(f"[COHN UDP] Packet from {addr}, size={len(data)}, mapped={_cohn_ip_to_serial.get(src_ip, 'UNKNOWN')}")
+        serial = _cohn_ip_to_serial.get(src_ip)
+        if not serial:
+            return
+        proc = _cohn_ffmpeg_procs.get(serial)
+        if proc and proc.poll() is None:
+            try:
+                proc.stdin.write(data)
+                proc.stdin.flush()
+            except (BrokenPipeError, OSError):
+                pass
+
+    def error_received(self, exc):
+        logger.warning(f"[COHN UDP] Error: {exc}")
+
+
+async def _ensure_udp_server():
+    """Start the shared UDP listener on port 8554 if not already running"""
+    global _cohn_udp_server
+    async with _cohn_udp_lock:
+        if _cohn_udp_server is not None:
+            return True
+        try:
+            loop = asyncio.get_event_loop()
+            transport, protocol = await loop.create_datagram_endpoint(
+                _CohnUdpDemuxer,
+                local_addr=("0.0.0.0", _COHN_UDP_PORT)
+            )
+            _cohn_udp_server = transport
+            logger.info(f"[COHN UDP] Listening on port {_COHN_UDP_PORT}")
+            return True
+        except Exception as e:
+            logger.error(f"[COHN UDP] Failed to start listener: {e}")
+            return False
+
+
+def _start_ffmpeg_relay(serial: str) -> bool:
+    """Start ffmpeg process that reads MPEG-TS from stdin and outputs HLS"""
+    _stop_ffmpeg_relay(serial)
+
+    cam_dir = HLS_OUTPUT_DIR / serial
+    cam_dir.mkdir(parents=True, exist_ok=True)
+
+    hls_path = str(cam_dir / "stream.m3u8")
+
+    cmd = [
+        "ffmpeg",
+        "-fflags", "nobuffer",
+        "-flags", "low_delay",
+        "-f", "mpegts",
+        "-i", "pipe:0",
+        "-c:v", "copy",
+        "-an",
+        "-f", "hls",
+        "-hls_time", "1",
+        "-hls_list_size", "3",
+        "-hls_flags", "delete_segments+append_list",
+        "-hls_segment_filename", str(cam_dir / "seg_%03d.ts"),
+        hls_path
+    ]
+
+    logger.info(f"[COHN {serial}] Starting ffmpeg relay (stdin pipe) → HLS:{hls_path}")
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_IGN)
+        )
+        _cohn_ffmpeg_procs[serial] = proc
+        return True
+    except Exception as e:
+        logger.error(f"[COHN {serial}] Failed to start ffmpeg: {e}")
+        return False
+
+
+def _stop_ffmpeg_relay(serial: str):
+    """Stop ffmpeg relay process for a camera"""
+    proc = _cohn_ffmpeg_procs.pop(serial, None)
+    if proc and proc.poll() is None:
+        try:
+            proc.stdin.close()
+        except Exception:
+            pass
+        proc.terminate()
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        logger.info(f"[COHN {serial}] Stopped ffmpeg relay")
+
+    # Clean up HLS files
+    cam_dir = HLS_OUTPUT_DIR / serial
+    if cam_dir.exists():
+        shutil.rmtree(cam_dir, ignore_errors=True)
+
+
+async def _start_single_cohn_preview(serial: str, creds: dict) -> dict:
+    """Start preview stream on a COHN camera via HTTPS + UDP-to-HLS relay"""
+    ip = creds.get("ip_address")
+    if not ip:
+        return {"success": False, "error": "No IP address"}
+
+    ssl_ctx = _get_cohn_ssl_context(creds, serial)
+    auth_header = cohn_manager.get_auth_header(serial)
+    headers = {"Authorization": auth_header} if auth_header else {}
+
+    try:
+        # Register IP→serial mapping for UDP demuxer
+        _cohn_ip_to_serial[ip] = serial
+
+        # Ensure shared UDP listener is running
+        if not await _ensure_udp_server():
+            return {"success": False, "error": "Failed to start UDP listener"}
+
+        # Start per-camera ffmpeg (reads from stdin pipe)
+        if not _start_ffmpeg_relay(serial):
+            return {"success": False, "error": "Failed to start stream relay"}
+
+        # Use webcam API to start streaming (sends TS over UDP to our IP:8554)
+        async with httpx.AsyncClient(verify=False, timeout=15.0) as client:
+            # First ensure clean state
+            for cleanup_path in ["/gopro/webcam/stop", "/gopro/webcam/exit"]:
+                try:
+                    await client.get(f"https://{ip}{cleanup_path}", headers=headers)
+                except Exception:
+                    pass
+            await asyncio.sleep(1)
+
+            # Start webcam mode (sends to port 8554 by default)
+            resp = await client.get(
+                f"https://{ip}/gopro/webcam/start?port={_COHN_UDP_PORT}",
+                headers=headers
+            )
+            logger.info(f"[COHN {serial}] webcam/start: {resp.status_code} {resp.text}")
+            if resp.status_code != 200:
+                _stop_ffmpeg_relay(serial)
+                return {"success": False, "error": f"webcam/start HTTP {resp.status_code}"}
+
+            # Start preview (this triggers UDP streaming)
+            resp = await client.get(
+                f"https://{ip}/gopro/webcam/preview",
+                headers=headers
+            )
+            logger.info(f"[COHN {serial}] webcam/preview: {resp.status_code} {resp.text}")
+            if resp.status_code != 200:
+                _stop_ffmpeg_relay(serial)
+                return {"success": False, "error": f"webcam/preview HTTP {resp.status_code}"}
+
+        # Wait for ffmpeg to produce the HLS manifest (up to 10 seconds)
+        hls_manifest = HLS_OUTPUT_DIR / serial / "stream.m3u8"
+        for _ in range(20):
+            if hls_manifest.exists() and hls_manifest.stat().st_size > 0:
+                break
+            await asyncio.sleep(0.5)
+
+        if not hls_manifest.exists():
+            logger.warning(f"[COHN {serial}] HLS manifest not ready after 10s, returning URL anyway")
+
+        # Stream URL served by our backend
+        stream_url = f"http://127.0.0.1:8000/api/cohn/hls/{serial}/stream.m3u8"
+        return {"success": True, "stream_url": stream_url, "ip": ip}
+    except Exception as e:
+        _stop_ffmpeg_relay(serial)
+        return {"success": False, "error": str(e)}
+
+
+async def _stop_single_cohn_preview(serial: str, creds: dict) -> dict:
+    """Stop preview stream on a COHN camera via HTTPS"""
+    ip = creds.get("ip_address")
+    if not ip:
+        return {"success": False, "error": "No IP address"}
+
+    ssl_ctx = _get_cohn_ssl_context(creds, serial)
+    auth_header = cohn_manager.get_auth_header(serial)
+    headers = {"Authorization": auth_header} if auth_header else {}
+
+    # Stop ffmpeg relay and remove IP mapping
+    _stop_ffmpeg_relay(serial)
+    _cohn_ip_to_serial.pop(ip, None)
+
+    try:
+        async with httpx.AsyncClient(verify=False, timeout=15.0) as client:
+            # Stop webcam preview and exit webcam mode
+            for path in ["/gopro/webcam/stop", "/gopro/webcam/exit"]:
+                try:
+                    await client.get(f"https://{ip}{path}", headers=headers)
+                except Exception:
+                    pass
+            return {"success": True}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+async def _reenable_cohn_via_ble(serial: str) -> dict:
+    """Re-enable COHN on a camera using the SDK's BLE connection.
+    This is needed when cameras wake from sleep and lose their COHN WiFi connection."""
+    cam = camera_manager.cameras.get(serial)
+    if not cam or not cam.connected or not cam.gopro:
+        return {"success": False, "error": "Camera not connected via BLE"}
+
+    try:
+        gopro = cam.gopro
+        # COHN enable command: Feature 0xF1, Action 0x65, Protobuf field 1 = True
+        # Protobuf encoding: field_tag(1, varint) = 0x08, value = 0x01
+        protobuf_data = bytes([0x08, 0x01])
+        payload = bytearray([len(protobuf_data) + 2, 0xF1, 0x65]) + bytearray(protobuf_data)
+
+        # Write directly to the BLE command characteristic (fire-and-forget)
+        from open_gopro.ble import BleUUID
+        cq_command_uuid = BleUUID("CQ_COMMAND", hex="b5f90072-aa8d-11e3-9046-0002a5d5c51b")
+
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, gopro._ble.write, cq_command_uuid, payload)
+        logger.info(f"[COHN {serial}] COHN enable command sent via BLE")
+        return {"success": True}
+    except Exception as e:
+        logger.error(f"[COHN {serial}] Re-enable failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/cohn/reenable")
+async def reenable_cohn_all():
+    """Re-enable COHN on all provisioned cameras via BLE"""
+    all_creds = cohn_manager.get_all_credentials()
+    results = {}
+    for serial in all_creds:
+        result = await _reenable_cohn_via_ble(serial)
+        results[serial] = result
+    # Wait for cameras to connect to WiFi
+    await asyncio.sleep(5)
+    # Check which are now online
+    online_status = await cohn_manager.check_all_cameras()
+    for serial in results:
+        results[serial]["online"] = online_status.get(serial, False)
+    return {"results": results}
+
+
+@app.post("/api/cohn/reenable/{serial}")
+async def reenable_cohn_single(serial: str):
+    """Re-enable COHN on a single camera via BLE"""
+    result = await _reenable_cohn_via_ble(serial)
+    if result.get("success"):
+        await asyncio.sleep(5)
+        online = await cohn_manager.check_camera_online(serial)
+        result["online"] = online
+    return result
+
+
+@app.get("/api/cohn/status")
+async def get_cohn_status():
+    """Get COHN status for all cameras"""
+    all_creds = cohn_manager.get_all_credentials()
+    online_status = await cohn_manager.check_all_cameras()
+
+    result = {}
+    for serial, creds in all_creds.items():
+        result[serial] = {
+            "provisioned": True,
+            "ip_address": creds.get("ip_address"),
+            "username": creds.get("username"),
+            "mac_address": creds.get("mac_address"),
+            "provisioned_at": creds.get("provisioned_at"),
+            "online": online_status.get(serial, False)
+        }
+
+    # Include non-provisioned cameras
+    for serial in camera_manager.cameras:
+        if serial not in result:
+            result[serial] = {"provisioned": False, "online": False}
+
+    return {"cameras": result}
+
+
+@app.get("/api/cohn/status/{serial}")
+async def get_cohn_status_single(serial: str):
+    """Get COHN status for a single camera"""
+    creds = cohn_manager.get_credentials(serial)
+    if not creds:
+        return {"serial": serial, "provisioned": False, "online": False}
+
+    online = await cohn_manager.check_camera_online(serial)
+    return {
+        "serial": serial,
+        "provisioned": True,
+        "ip_address": creds.get("ip_address"),
+        "username": creds.get("username"),
+        "mac_address": creds.get("mac_address"),
+        "provisioned_at": creds.get("provisioned_at"),
+        "online": online
+    }
+
+
+@app.post("/api/cohn/provision/{serial}")
+async def provision_cohn(serial: str, body: COHNProvisionModel):
+    """Provision a camera for COHN via BLE"""
+    try:
+        # Disconnect SDK BLE first if connected
+        camera = camera_manager.get_camera(serial)
+        if camera and camera.connected:
+            logger.info(f"Disconnecting SDK BLE for {serial} before COHN provisioning...")
+            try:
+                await camera.disconnect()
+            except Exception as e:
+                logger.warning(f"SDK BLE disconnect warning: {e}")
+
+        async def progress_callback(step, total, msg):
+            await broadcast_message({
+                "type": "cohn_provisioning_progress",
+                "serial": serial,
+                "step": step,
+                "total": total,
+                "message": msg
+            })
+
+        result = await cohn_manager.provision_camera(
+            serial, body.wifi_ssid, body.wifi_password, progress_callback
+        )
+
+        await broadcast_message({
+            "type": "cohn_provisioning_complete",
+            "serial": serial,
+            "ip_address": result.get("ip_address"),
+            "success": True
+        })
+
+        return result
+
+    except Exception as e:
+        logger.error(f"COHN provisioning failed for {serial}: {e}", exc_info=True)
+        await broadcast_message({
+            "type": "cohn_provisioning_error",
+            "serial": serial,
+            "error": str(e)
+        })
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/cohn/provision/{serial}")
+async def remove_cohn_provision(serial: str):
+    """Remove COHN credentials for a camera"""
+    success = cohn_manager.remove_credentials(serial)
+    if success:
+        return {"success": True, "message": f"COHN credentials removed for {serial}"}
+    else:
+        raise HTTPException(status_code=404, detail=f"No COHN credentials found for {serial}")
+
+
+@app.get("/api/cohn/hls/{serial}/{filename}")
+async def serve_cohn_hls(serial: str, filename: str):
+    """Serve HLS manifest and segments for COHN camera streams"""
+    file_path = HLS_OUTPUT_DIR / serial / filename
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Stream not ready")
+
+    if filename.endswith(".m3u8"):
+        content = file_path.read_text()
+        return Response(
+            content=content,
+            media_type="application/vnd.apple.mpegurl",
+            headers={"Cache-Control": "no-cache", "Access-Control-Allow-Origin": "*"}
+        )
+    elif filename.endswith(".ts"):
+        return FileResponse(
+            str(file_path),
+            media_type="video/mp2t",
+            headers={"Cache-Control": "no-cache", "Access-Control-Allow-Origin": "*"}
+        )
+    else:
+        raise HTTPException(status_code=400, detail="Invalid file type")
+
+
+@app.post("/api/cohn/preview/start")
+async def start_cohn_preview_all():
+    """Start preview on all COHN-provisioned cameras"""
+    all_creds = cohn_manager.get_all_credentials()
+    if not all_creds:
+        raise HTTPException(status_code=400, detail="No COHN-provisioned cameras")
+
+    results = {}
+    tasks = []
+    serials = []
+
+    for serial, creds in all_creds.items():
+        tasks.append(_start_single_cohn_preview(serial, creds))
+        serials.append(serial)
+
+    task_results = await asyncio.gather(*tasks, return_exceptions=True)
+    for serial, result in zip(serials, task_results):
+        if isinstance(result, Exception):
+            results[serial] = {"success": False, "error": str(result)}
+        else:
+            results[serial] = result
+
+        await broadcast_message({
+            "type": "cohn_preview_started",
+            "serial": serial,
+            "success": results[serial].get("success", False),
+            "stream_url": results[serial].get("stream_url")
+        })
+
+    return {"results": results}
+
+
+@app.post("/api/cohn/preview/start/{serial}")
+async def start_cohn_preview_single(serial: str):
+    """Start preview on a single COHN camera"""
+    creds = cohn_manager.get_credentials(serial)
+    if not creds:
+        raise HTTPException(status_code=404, detail=f"No COHN credentials for {serial}")
+
+    result = await _start_single_cohn_preview(serial, creds)
+
+    await broadcast_message({
+        "type": "cohn_preview_started",
+        "serial": serial,
+        "success": result.get("success", False),
+        "stream_url": result.get("stream_url")
+    })
+
+    return result
+
+
+@app.post("/api/cohn/preview/stop")
+async def stop_cohn_preview_all():
+    """Stop preview on all COHN-provisioned cameras"""
+    all_creds = cohn_manager.get_all_credentials()
+    if not all_creds:
+        raise HTTPException(status_code=400, detail="No COHN-provisioned cameras")
+
+    results = {}
+    tasks = []
+    serials = []
+
+    for serial, creds in all_creds.items():
+        tasks.append(_stop_single_cohn_preview(serial, creds))
+        serials.append(serial)
+
+    task_results = await asyncio.gather(*tasks, return_exceptions=True)
+    for serial, result in zip(serials, task_results):
+        if isinstance(result, Exception):
+            results[serial] = {"success": False, "error": str(result)}
+        else:
+            results[serial] = result
+
+        await broadcast_message({
+            "type": "cohn_preview_stopped",
+            "serial": serial,
+            "success": results[serial].get("success", False)
+        })
+
+    return {"results": results}
+
+
+@app.post("/api/cohn/preview/stop/{serial}")
+async def stop_cohn_preview_single(serial: str):
+    """Stop preview on a single COHN camera"""
+    creds = cohn_manager.get_credentials(serial)
+    if not creds:
+        raise HTTPException(status_code=404, detail=f"No COHN credentials for {serial}")
+
+    result = await _stop_single_cohn_preview(serial, creds)
+
+    await broadcast_message({
+        "type": "cohn_preview_stopped",
+        "serial": serial,
+        "success": result.get("success", False)
+    })
+
+    return result
 
 
 # ============== Health Check ==============

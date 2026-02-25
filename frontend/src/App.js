@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import CameraManagement from './components/CameraManagement';
-import RecordingControl from './components/RecordingControl';
+import RecordingDashboard from './components/RecordingDashboard';
 import DownloadUpload from './components/DownloadUpload';
 import LivePreview from './components/LivePreview';
 import './App.css';
@@ -16,6 +16,22 @@ function App() {
   const [downloadWsMessage, setDownloadWsMessage] = useState(null);
   const downloadWsMsgCounter = useRef(0);
   const [activeShoot, setActiveShoot] = useState(null);
+  const [cohnStatus, setCohnStatus] = useState({});
+  const wsSubscribersRef = useRef(new Set());
+
+  const subscribeWsMessages = useCallback((callback) => {
+    wsSubscribersRef.current.add(callback);
+    return () => wsSubscribersRef.current.delete(callback);
+  }, []);
+
+  const fetchCohnStatus = useCallback(async () => {
+    try {
+      const response = await axios.get(`${API_URL}/api/cohn/status`);
+      setCohnStatus(response.data.cameras || {});
+    } catch (error) {
+      console.error('Failed to fetch COHN status:', error);
+    }
+  }, []);
 
   // Connect to WebSocket for real-time updates
   useEffect(() => {
@@ -134,9 +150,34 @@ function App() {
       case 'take_stopped':
         fetchActiveShoot();
         break;
+      case 'health_update':
+        // Health data is handled by RecordingDashboard via its own polling
+        break;
+      case 'cohn_camera_online':
+      case 'cohn_camera_offline':
+        setCohnStatus(prev => ({
+          ...prev,
+          [data.serial]: {
+            ...(prev[data.serial] || {}),
+            online: data.online
+          }
+        }));
+        break;
+      case 'cohn_provisioning_progress':
+      case 'cohn_provisioning_complete':
+      case 'cohn_provisioning_error':
+      case 'cohn_preview_started':
+      case 'cohn_preview_stopped':
+        // Forward to subscribers (LivePreview)
+        break;
       default:
         break;
     }
+
+    // Broadcast all WS messages to subscribers
+    wsSubscribersRef.current.forEach(cb => {
+      try { cb(data); } catch (e) { console.error('WS subscriber error:', e); }
+    });
   };
 
   const checkBackendStatus = async () => {
@@ -146,6 +187,7 @@ function App() {
         setBackendStatus('connected');
         await fetchCameras();
         fetchActiveShoot();
+        fetchCohnStatus();
 
         // Check for existing BLE connections in background (don't await)
         checkExistingConnections();
@@ -221,7 +263,7 @@ function App() {
           className={`tab ${activeTab === 'recording' ? 'active' : ''}`}
           onClick={() => setActiveTab('recording')}
         >
-          Recording Control
+          Dashboard
         </button>
         <button
           className={`tab ${activeTab === 'preview' ? 'active' : ''}`}
@@ -246,7 +288,7 @@ function App() {
           />
         )}
         {activeTab === 'recording' && (
-          <RecordingControl
+          <RecordingDashboard
             cameras={cameras}
             onCamerasUpdate={fetchCameras}
             apiUrl={API_URL}
@@ -258,6 +300,9 @@ function App() {
           <LivePreview
             cameras={cameras}
             apiUrl={API_URL}
+            cohnStatus={cohnStatus}
+            onCohnUpdate={fetchCohnStatus}
+            subscribeWsMessages={subscribeWsMessages}
           />
         )}
         {activeTab === 'download' && (

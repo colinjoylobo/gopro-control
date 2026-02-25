@@ -5,25 +5,470 @@
 }
 
 .card {
-  background: white;
+  background: #1a1a1a;
   border-radius: 8px;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  box-shadow: 0 4px 6px rgba(0,0,0,0.3);
   padding: 1.5rem;
 }
 
 .card-header {
   margin-bottom: 1.5rem;
   padding-bottom: 1rem;
-  border-bottom: 2px solid #f0f0f0;
+  border-bottom: 2px solid #333;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
 }
 
 .card-header h2 {
   margin: 0;
   font-size: 1.5rem;
-  color: #333;
+  color: #e0e0e0;
 }
 
-/* Camera Selection Controls */
+.header-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.fullscreen-grid-btn {
+  font-size: 0.85rem;
+}
+
+/* ============== Layout Selector ============== */
+.layout-selector {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1.5rem;
+  padding: 0.75rem;
+  background: #1a1a1a;
+  border-radius: 8px;
+  flex-wrap: wrap;
+}
+
+.layout-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.5rem 0.85rem;
+  border: 2px solid transparent;
+  border-radius: 6px;
+  background: #2a2a2a;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-size: 0.85rem;
+  color: #ccc;
+}
+
+.layout-btn:hover {
+  border-color: #667eea;
+  color: #667eea;
+}
+
+.layout-btn.active {
+  border-color: #667eea;
+  background: rgba(102,126,234,0.15);
+  color: #667eea;
+  font-weight: 600;
+}
+
+.layout-icon {
+  font-size: 1.1rem;
+}
+
+.layout-label {
+  font-size: 0.8rem;
+}
+
+.layout-spacer {
+  flex: 1;
+}
+
+/* WiFi indicator in layout bar */
+.wifi-indicator {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  padding: 0.35rem 0.75rem;
+  border-radius: 20px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.wifi-indicator.connected {
+  background: rgba(16, 185, 129, 0.15);
+  color: #10b981;
+}
+
+.wifi-indicator.disconnected {
+  background: rgba(245, 158, 11, 0.15);
+  color: #f59e0b;
+}
+
+.wifi-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.wifi-indicator.connected .wifi-dot {
+  background: #10b981;
+}
+
+.wifi-indicator.disconnected .wifi-dot {
+  background: #f59e0b;
+}
+
+.btn-xs {
+  padding: 0.2rem 0.5rem;
+  font-size: 0.75rem;
+  margin-left: 0.4rem;
+}
+
+/* ============== Camera Grid Layouts ============== */
+.camera-grid {
+  display: grid;
+  gap: 0.75rem;
+  margin: 1.5rem 0;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #000;
+  padding: 0.75rem;
+}
+
+.layout-auto {
+  grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+}
+
+.layout-1up {
+  grid-template-columns: 1fr;
+}
+
+.layout-2x1 {
+  grid-template-columns: 1fr 1fr;
+}
+
+.layout-2x2 {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.layout-pip {
+  grid-template-columns: 1fr;
+  grid-template-rows: 3fr 1fr;
+}
+
+.layout-pip .camera-panel:first-child {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.layout-pip .camera-panel:not(:first-child) {
+  grid-column: 1;
+}
+
+/* For PIP, create a sub-row for small cameras */
+.layout-pip {
+  grid-template-columns: 1fr;
+}
+
+.layout-3x2 {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+/* Camera Panel */
+.camera-panel {
+  position: relative;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #111;
+}
+
+/* Camera Panel States */
+.active-panel {
+  border: 2px solid #667eea;
+  box-shadow: 0 0 12px rgba(102, 126, 234, 0.3);
+}
+
+.disconnected-panel {
+  opacity: 0.55;
+}
+
+.recording-panel {
+  border: 2px solid #ef4444;
+  box-shadow: 0 0 8px rgba(239, 68, 68, 0.3);
+}
+
+.placeholder-panel {
+  opacity: 0.6;
+}
+
+/* ============== Camera Info Card ============== */
+.camera-info-card {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 220px;
+  background: linear-gradient(145deg, #1a1a2e, #16213e);
+  color: #e0e0e0;
+}
+
+.info-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 0.75rem 0.85rem;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+
+.info-card-name {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.cam-name {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cam-serial {
+  font-size: 0.7rem;
+  color: #888;
+  font-family: monospace;
+}
+
+.info-card-dots {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+  padding-top: 0.15rem;
+}
+
+.dot-indicator {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.dot-recording {
+  background: #ef4444;
+  animation: pulse 1.5s infinite;
+  box-shadow: 0 0 6px rgba(239, 68, 68, 0.6);
+}
+
+.dot-conn-on {
+  background: #10b981;
+  box-shadow: 0 0 4px rgba(16, 185, 129, 0.4);
+}
+
+.dot-conn-off {
+  background: #555;
+}
+
+/* Card Body */
+.info-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem 0.85rem;
+  flex: 1;
+}
+
+.info-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+}
+
+.info-label {
+  width: 52px;
+  flex-shrink: 0;
+  color: #999;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.info-bar-track {
+  flex: 1;
+  height: 6px;
+  background: rgba(255,255,255,0.1);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.info-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.6s ease;
+}
+
+.info-val {
+  font-size: 0.8rem;
+  font-weight: 600;
+  min-width: 36px;
+  text-align: right;
+}
+
+.info-sub {
+  font-size: 0.7rem;
+  color: #888;
+  white-space: nowrap;
+}
+
+/* Recording row */
+.info-row-rec {
+  background: rgba(239, 68, 68, 0.12);
+  margin: 0 -0.85rem;
+  padding: 0.35rem 0.85rem;
+}
+
+.info-val-rec {
+  color: #ef4444;
+  font-family: monospace;
+  font-size: 0.9rem;
+}
+
+/* Status chips row */
+.info-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.15rem;
+}
+
+.info-chip {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border-radius: 10px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.thermal-normal {
+  background: rgba(16, 185, 129, 0.15);
+  color: #10b981;
+}
+
+.thermal-warm {
+  background: rgba(245, 158, 11, 0.15);
+  color: #f59e0b;
+}
+
+.thermal-hot {
+  background: rgba(239, 68, 68, 0.2);
+  color: #ef4444;
+  animation: pulse 2s infinite;
+}
+
+.gps-on {
+  background: rgba(16, 185, 129, 0.15);
+  color: #10b981;
+}
+
+.gps-off {
+  background: rgba(100, 100, 100, 0.2);
+  color: #888;
+}
+
+.sd-ok {
+  background: rgba(16, 185, 129, 0.15);
+  color: #10b981;
+}
+
+.sd-err {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+}
+
+/* Media counts row */
+.info-media-row {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 0.1rem;
+}
+
+.info-media {
+  font-size: 0.72rem;
+  color: #888;
+}
+
+/* Preview button */
+.btn-preview {
+  margin-top: auto;
+  padding: 0.5rem;
+  width: 100%;
+  background: #667eea;
+  color: #fff;
+  border: none;
+  border-radius: 0;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 600;
+  transition: background 0.2s;
+}
+
+.btn-preview:hover:not(:disabled) {
+  background: #5568d3;
+}
+
+.btn-preview:disabled {
+  background: #555;
+  color: #999;
+  cursor: not-allowed;
+}
+
+/* Disconnected card body */
+.info-card-disconnected {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  padding: 2rem 1rem;
+  text-align: center;
+}
+
+.disconnected-text {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #888;
+}
+
+.disconnected-hint {
+  font-size: 0.75rem;
+  color: #666;
+  margin-top: 0.4rem;
+}
+
+/* Waiting placeholder */
+.waiting-placeholder {
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+}
+
+/* Fullscreen mode */
+.fullscreen-mode {
+  background: #000;
+  padding: 1rem;
+}
+
+.fullscreen-mode .camera-panel {
+  border: 1px solid #333;
+}
+
+/* ============== Camera Selection Controls ============== */
 .preview-controls {
   display: flex;
   justify-content: space-between;
@@ -31,7 +476,7 @@
   gap: 1rem;
   margin-bottom: 1.5rem;
   padding: 1rem;
-  background: #f8f9fa;
+  background: #2a2a2a;
   border-radius: 8px;
 }
 
@@ -44,7 +489,7 @@
 
 .control-group label {
   font-weight: 600;
-  color: #555;
+  color: #ccc;
   white-space: nowrap;
 }
 
@@ -52,15 +497,16 @@
   flex: 1;
   padding: 0.5rem 1rem;
   font-size: 1rem;
-  border: 2px solid #ddd;
+  border: 2px solid #555;
   border-radius: 6px;
-  background: white;
+  background: #2a2a2a;
+  color: #e0e0e0;
   cursor: pointer;
   transition: border-color 0.2s;
 }
 
 .camera-select:hover:not(:disabled) {
-  border-color: #007bff;
+  border-color: #667eea;
 }
 
 .camera-select:disabled {
@@ -89,6 +535,11 @@
   cursor: not-allowed;
 }
 
+.btn-sm {
+  padding: 0.4rem 0.8rem;
+  font-size: 0.85rem;
+}
+
 .btn-success {
   background: #28a745;
   color: white;
@@ -112,17 +563,26 @@
 }
 
 .btn-primary {
-  background: #007bff;
+  background: #667eea;
   color: white;
 }
 
 .btn-primary:hover:not(:disabled) {
-  background: #0056b3;
+  background: #5568d3;
   transform: translateY(-1px);
-  box-shadow: 0 2px 8px rgba(0, 123, 255, 0.3);
+  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
 }
 
-/* WiFi Status Section */
+.btn-secondary {
+  background: #6c757d;
+  color: white;
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: #5a6268;
+}
+
+/* ============== WiFi Status Section ============== */
 .wifi-status-section {
   margin: 1.5rem 0;
 }
@@ -130,17 +590,17 @@
 .wifi-status {
   padding: 1.5rem;
   border-radius: 8px;
-  border: 2px solid #ddd;
+  border: 2px solid #555;
 }
 
 .wifi-status.connected {
-  background: #d4edda;
-  border-color: #28a745;
+  background: rgba(16, 185, 129, 0.1);
+  border-color: #10b981;
 }
 
 .wifi-status.disconnected {
-  background: #fff3cd;
-  border-color: #ffc107;
+  background: rgba(245, 158, 11, 0.1);
+  border-color: #f59e0b;
 }
 
 .status-header {
@@ -153,12 +613,12 @@
 .status-header h3 {
   margin: 0;
   font-size: 1.2rem;
-  color: #333;
+  color: #e0e0e0;
 }
 
 .current-wifi {
   font-size: 0.95rem;
-  color: #666;
+  color: #aaa;
 }
 
 .wifi-instructions {
@@ -167,7 +627,7 @@
 
 .wifi-instructions p {
   margin: 0.5rem 0;
-  color: #555;
+  color: #ccc;
 }
 
 .wifi-details {
@@ -175,35 +635,28 @@
   gap: 2rem;
   margin: 1rem 0;
   padding: 1rem;
-  background: rgba(255, 255, 255, 0.7);
+  background: rgba(255, 255, 255, 0.05);
   border-radius: 6px;
 }
 
 .wifi-detail-item {
   font-size: 0.95rem;
-  color: #333;
+  color: #e0e0e0;
 }
 
 .wifi-detail-item strong {
-  color: #000;
+  color: #fff;
   margin-right: 0.5rem;
 }
 
 .manual-instruction {
   font-size: 0.85rem;
-  color: #777;
+  color: #888;
   margin-top: 0.75rem;
   font-style: italic;
 }
 
-/* Video Container */
-.video-container {
-  margin: 1.5rem 0;
-  border-radius: 8px;
-  overflow: hidden;
-  background: #000;
-}
-
+/* ============== Video Container ============== */
 .video-wrapper {
   position: relative;
   width: 100%;
@@ -231,34 +684,59 @@
   font-size: 0.85rem;
 }
 
+.stream-info-left {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.stream-info-right {
+  display: flex;
+  align-items: center;
+}
+
 .live-badge {
   background: #dc3545;
-  padding: 0.25rem 0.75rem;
-  border-radius: 12px;
+  padding: 0.2rem 0.6rem;
+  border-radius: 10px;
   font-weight: 700;
-  font-size: 0.8rem;
+  font-size: 0.75rem;
   animation: pulse 2s infinite;
 }
 
 .recording-badge {
   background: #ff6b6b;
-  padding: 0.25rem 0.75rem;
-  border-radius: 12px;
+  padding: 0.2rem 0.6rem;
+  border-radius: 10px;
   font-weight: 700;
-  font-size: 0.8rem;
+  font-size: 0.75rem;
   animation: pulse 2s infinite;
-  margin-left: 0.5rem;
+}
+
+.camera-label-badge {
+  font-size: 0.8rem;
+  opacity: 0.9;
+  font-weight: 500;
+}
+
+.fullscreen-btn {
+  background: rgba(255,255,255,0.15);
+  border: 1px solid rgba(255,255,255,0.3);
+  color: white;
+  padding: 0.3rem 0.6rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 1rem;
+  transition: background 0.2s;
+}
+
+.fullscreen-btn:hover {
+  background: rgba(255,255,255,0.3);
 }
 
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.7; }
-}
-
-.stream-url-info {
-  font-family: monospace;
-  font-size: 0.75rem;
-  opacity: 0.8;
 }
 
 .video-placeholder {
@@ -297,18 +775,18 @@
   opacity: 0.9;
 }
 
-/* Instructions Section */
+/* ============== Instructions Section ============== */
 .instructions-section {
   margin-top: 2rem;
   padding: 1.5rem;
-  background: #f8f9fa;
+  background: #2a2a2a;
   border-radius: 8px;
 }
 
 .instructions-section h3 {
   margin: 0 0 1rem 0;
   font-size: 1.2rem;
-  color: #333;
+  color: #e0e0e0;
 }
 
 .instructions-section ol {
@@ -319,15 +797,15 @@
 
 .instructions-section ol li {
   margin-bottom: 0.75rem;
-  color: #555;
+  color: #ccc;
 }
 
 .instructions-section ol li strong {
-  color: #000;
+  color: #fff;
   font-weight: 600;
 }
 
-/* Alerts */
+/* ============== Alerts ============== */
 .alert {
   padding: 1rem 1.5rem;
   margin-bottom: 1rem;
@@ -336,38 +814,38 @@
 }
 
 .alert-success {
-  background: #d4edda;
-  border: 1px solid #c3e6cb;
-  color: #155724;
+  background: rgba(16, 185, 129, 0.15);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  color: #10b981;
 }
 
 .alert-error {
-  background: #f8d7da;
-  border: 1px solid #f5c6cb;
-  color: #721c24;
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: #ef4444;
 }
 
 .alert-info {
-  background: #d1ecf1;
-  border: 1px solid #bee5eb;
-  color: #0c5460;
+  background: rgba(102, 126, 234, 0.15);
+  border: 1px solid rgba(102, 126, 234, 0.3);
+  color: #8b9cf7;
 }
 
 .alert-warning {
-  background: #fff3cd;
-  border: 1px solid #ffeaa7;
-  color: #856404;
+  background: rgba(245, 158, 11, 0.15);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  color: #f59e0b;
 }
 
 .alert strong {
   font-weight: 700;
 }
 
-/* Empty State */
+/* ============== Empty State ============== */
 .empty-state {
   text-align: center;
   padding: 4rem 2rem;
-  color: #666;
+  color: #888;
 }
 
 .empty-state p {
@@ -375,7 +853,7 @@
   margin: 0;
 }
 
-/* Responsive Design */
+/* ============== Responsive Design ============== */
 @media (max-width: 1024px) {
   .preview-controls {
     flex-direction: column;
@@ -405,6 +883,18 @@
     align-items: flex-start;
     gap: 0.5rem;
   }
+
+  .layout-auto {
+    grid-template-columns: 1fr;
+  }
+
+  .layout-2x1 {
+    grid-template-columns: 1fr;
+  }
+
+  .layout-3x2 {
+    grid-template-columns: repeat(2, 1fr);
+  }
 }
 
 @media (max-width: 768px) {
@@ -428,5 +918,432 @@
     flex-direction: column;
     gap: 0.5rem;
     align-items: flex-start;
+  }
+
+  .layout-selector {
+    gap: 0.35rem;
+  }
+
+  .layout-btn {
+    padding: 0.4rem 0.6rem;
+    font-size: 0.8rem;
+  }
+
+  .layout-label {
+    display: none;
+  }
+
+  .layout-2x2, .layout-3x2 {
+    grid-template-columns: 1fr;
+  }
+
+  .camera-info-card {
+    min-height: 180px;
+  }
+
+  .info-row {
+    font-size: 0.75rem;
+  }
+
+  .info-label {
+    width: 44px;
+    font-size: 0.7rem;
+  }
+}
+
+/* ============== COHN Mode Toggle ============== */
+.mode-toggle {
+  display: flex;
+  gap: 0;
+  margin-bottom: 1rem;
+  background: #1a1a1a;
+  border-radius: 8px;
+  padding: 4px;
+  width: fit-content;
+}
+
+.mode-btn {
+  padding: 0.5rem 1.25rem;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #aaa;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.mode-btn:hover {
+  color: #e0e0e0;
+}
+
+.mode-btn.active {
+  background: #667eea;
+  color: white;
+  box-shadow: 0 2px 6px rgba(102, 126, 234, 0.3);
+}
+
+/* ============== COHN Setup ============== */
+.cohn-setup {
+  margin-bottom: 1.25rem;
+  padding: 1rem;
+  background: #1e1e1e;
+  border-radius: 8px;
+  border: 1px solid #333;
+}
+
+.cohn-setup h3 {
+  margin: 0 0 0.25rem 0;
+  font-size: 1rem;
+  color: #e0e0e0;
+}
+
+.cohn-setup-hint {
+  font-size: 0.8rem;
+  color: #888;
+  margin: 0 0 0.75rem 0;
+}
+
+.wifi-input-group {
+  margin-bottom: 1rem;
+}
+
+.input-row {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.wifi-input {
+  flex: 1;
+  min-width: 180px;
+  padding: 0.5rem 0.75rem;
+  border: 2px solid #555;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  background: #2a2a2a;
+  color: #e0e0e0;
+  transition: border-color 0.2s;
+}
+
+.wifi-input:focus {
+  border-color: #667eea;
+  outline: none;
+}
+
+/* ============== Provision List ============== */
+.provision-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.provision-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.6rem 0.75rem;
+  background: #2a2a2a;
+  border-radius: 6px;
+  border: 1px solid #3a3a3a;
+}
+
+.provision-info {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.provision-name {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: #e0e0e0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.provision-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.provision-progress {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  color: #667eea;
+}
+
+.progress-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid #555;
+  border-top-color: #667eea;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.progress-text {
+  font-size: 0.78rem;
+  color: #aaa;
+  max-width: 300px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ============== Status Badges ============== */
+.status-badge {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border-radius: 10px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.status-badge.provisioned {
+  background: rgba(16, 185, 129, 0.15);
+  color: #10b981;
+}
+
+.status-badge.provisioning {
+  background: rgba(102, 126, 234, 0.12);
+  color: #667eea;
+}
+
+.status-badge.not-provisioned {
+  background: rgba(100, 100, 100, 0.12);
+  color: #888;
+}
+
+/* ============== Multi-Camera Controls ============== */
+.multi-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+  background: #1e1e1e;
+  border-radius: 8px;
+}
+
+.controls-left {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.controls-label {
+  font-size: 0.85rem;
+  color: #aaa;
+  font-weight: 500;
+}
+
+.controls-right {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* ============== IP Badge ============== */
+.ip-badge {
+  display: inline-block;
+  padding: 0.1rem 0.45rem;
+  background: rgba(102, 126, 234, 0.12);
+  color: #667eea;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  font-family: monospace;
+  font-weight: 600;
+}
+
+/* ============== COHN Panel States ============== */
+.camera-panel.cohn-streaming {
+  border: 2px solid #10b981;
+  box-shadow: 0 0 12px rgba(16, 185, 129, 0.3);
+}
+
+.camera-panel.cohn-online:not(.cohn-streaming) {
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+/* ============== Per-Camera Actions ============== */
+.per-cam-actions {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid rgba(255,255,255,0.1);
+}
+
+/* ============== Settings Panel ============== */
+.settings-panel {
+  margin-bottom: 1rem;
+  border: 1px solid #333;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.settings-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 0.75rem 1rem;
+  background: #2a2a2a;
+  border: none;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #e0e0e0;
+  transition: background 0.2s;
+}
+
+.settings-toggle:hover {
+  background: #333;
+}
+
+.settings-toggle-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.settings-toggle-arrow {
+  font-size: 0.8rem;
+  transition: transform 0.2s;
+}
+
+.settings-toggle-arrow.open {
+  transform: rotate(180deg);
+}
+
+.settings-body {
+  padding: 1rem;
+  background: #1e1e1e;
+  border-top: 1px solid #333;
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.setting-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.setting-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #aaa;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.setting-select {
+  padding: 0.45rem 0.6rem;
+  border: 2px solid #555;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  background: #2a2a2a;
+  color: #e0e0e0;
+  cursor: pointer;
+  transition: border-color 0.2s;
+}
+
+.setting-select:focus {
+  border-color: #667eea;
+  outline: none;
+}
+
+.gps-toggle-btn {
+  padding: 0.45rem 0.6rem;
+  border: 2px solid #555;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.gps-toggle-btn.gps-on {
+  background: rgba(16, 185, 129, 0.15);
+  border-color: #10b981;
+  color: #10b981;
+}
+
+.gps-toggle-btn.gps-off {
+  background: #2a2a2a;
+  border-color: #555;
+  color: #888;
+}
+
+.settings-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+/* ============== COHN Responsive ============== */
+@media (max-width: 768px) {
+  .mode-toggle {
+    width: 100%;
+  }
+
+  .mode-btn {
+    flex: 1;
+    text-align: center;
+    font-size: 0.8rem;
+    padding: 0.4rem 0.5rem;
+  }
+
+  .input-row {
+    flex-direction: column;
+  }
+
+  .wifi-input {
+    min-width: 0;
+  }
+
+  .provision-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+  }
+
+  .provision-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .multi-controls {
+    flex-direction: column;
+    gap: 0.5rem;
+    align-items: stretch;
+  }
+
+  .controls-right {
+    justify-content: flex-end;
+  }
+
+  .settings-grid {
+    grid-template-columns: repeat(2, 1fr);
   }
 }

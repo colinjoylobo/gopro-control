@@ -12,14 +12,27 @@ function DownloadUpload({ cameras, apiUrl, downloadWsMessage, activeShoot }) {
   const [uploadingFiles, setUploadingFiles] = useState(new Set());
   const [message, setMessage] = useState(null);
   const [downloadProgress, setDownloadProgress] = useState({});
-  const [uploadProgress, setUploadProgress] = useState(null); // { current: 1, total: 8, filename: "file.mp4" }
+  const [uploadProgress, setUploadProgress] = useState(null);
   const [currentWiFi, setCurrentWiFi] = useState(null);
-  const [wifiInfo, setWifiInfo] = useState({}); // Full wifi status {ssid, ip, on_gopro, network_type, display_name}
-  const [uploadedZips, setUploadedZips] = useState([]); // Store all uploaded ZIP URLs
-  const [maxFiles, setMaxFiles] = useState(''); // Number of files to download (empty = all files)
-  const [bulkDownloadProgress, setBulkDownloadProgress] = useState(null); // { currentCamera: 2, totalCameras: 4, cameraName: "GoPro 2152" }
+  const [wifiInfo, setWifiInfo] = useState({});
+  const [uploadedZips, setUploadedZips] = useState([]);
+  const [maxFiles, setMaxFiles] = useState('');
+  const [bulkDownloadProgress, setBulkDownloadProgress] = useState(null);
+  // Browse/scan state
+  const [browseFiles, setBrowseFiles] = useState({}); // { serial: { videos: [], others: [], total_files, total_size_human } }
+  const [browsing, setBrowsing] = useState(null); // serial currently being browsed
+  const [selectedFiles, setSelectedFiles] = useState({}); // { serial: Set of "dir/filename" }
+  // Erase state
+  const [eraseConfirm, setEraseConfirm] = useState(null); // serial awaiting confirmation
+  const [eraseInput, setEraseInput] = useState('');
+  const [erasing, setErasing] = useState(null); // serial currently being erased
 
   const connectedCameras = cameras.filter(cam => cam.connected);
+  const sortedCameras = [...cameras].sort((a, b) => {
+    if (a.connected && !b.connected) return -1;
+    if (!a.connected && b.connected) return 1;
+    return 0;
+  });
 
   useEffect(() => {
     fetchDownloadedFiles();
@@ -83,6 +96,28 @@ function DownloadUpload({ cameras, apiUrl, downloadWsMessage, activeShoot }) {
         return newProgress;
       });
       setMessage({ type: 'error', text: data.error || 'Download failed' });
+      setTimeout(() => setMessage(null), 5000);
+    } else if (data.type === 'browse_status') {
+      if (data.status === 'scanning') {
+        setMessage({ type: 'info', text: data.message || 'Scanning camera media...' });
+      } else if (data.status === 'error') {
+        setBrowsing(null);
+        setMessage({ type: 'error', text: data.message || 'Browse failed' });
+        setTimeout(() => setMessage(null), 5000);
+      }
+    } else if (data.type === 'browse_complete') {
+      setBrowsing(null);
+      setMessage({ type: 'success', text: `Found ${data.summary?.total_files || 0} files on camera ${data.serial}` });
+      setTimeout(() => setMessage(null), 5000);
+    } else if (data.type === 'sd_erased') {
+      setErasing(null);
+      if (data.success) {
+        setMessage({ type: 'success', text: `SD card erased on camera ${data.serial}` });
+        // Clear browse files for this camera
+        setBrowseFiles(prev => { const n = {...prev}; delete n[data.serial]; return n; });
+      } else {
+        setMessage({ type: 'error', text: `Failed to erase SD card on camera ${data.serial}` });
+      }
       setTimeout(() => setMessage(null), 5000);
     }
   };
@@ -399,6 +434,169 @@ function DownloadUpload({ cameras, apiUrl, downloadWsMessage, activeShoot }) {
     }
 
     setTimeout(() => setMessage(null), 8000);
+  };
+
+  const handleBrowseCamera = async (serial) => {
+    setBrowsing(serial);
+    setMessage({ type: 'info', text: `Scanning SD card on camera ${serial}...` });
+
+    try {
+      const response = await axios.post(`${apiUrl}/api/browse/${serial}`, null, { timeout: 120000 });
+      const summary = response.data.summary;
+      setBrowseFiles(prev => ({ ...prev, [serial]: summary }));
+      // Initialize selected files for this camera
+      setSelectedFiles(prev => ({ ...prev, [serial]: new Set() }));
+    } catch (error) {
+      setMessage({
+        type: 'error',
+        text: `Browse failed: ${error.response?.data?.detail || error.message}`
+      });
+      setTimeout(() => setMessage(null), 5000);
+    } finally {
+      setBrowsing(null);
+    }
+  };
+
+  const handleDownloadLatest = async (serial) => {
+    const camera = cameras.find(c => c.serial === serial);
+    if (!camera) return;
+
+    setDownloading(true);
+    setDownloadProgress(prev => ({
+      ...prev,
+      [serial]: { filename: 'Fetching latest video...', current: 0, total: 0, percent: 0 }
+    }));
+    setMessage({ type: 'info', text: `Downloading latest video from ${camera.name || `GoPro ${serial}`}...` });
+
+    try {
+      const response = await axios.post(`${apiUrl}/api/download/${serial}/latest`, null, { timeout: 300000 });
+      setMessage({
+        type: 'success',
+        text: `Downloaded ${response.data.files_count} file(s) from ${camera.name || `GoPro ${serial}`}!`
+      });
+      setDownloadProgress(prev => { const n = {...prev}; delete n[serial]; return n; });
+      fetchDownloadedFiles();
+      setTimeout(() => setMessage(null), 5000);
+    } catch (error) {
+      setDownloadProgress(prev => { const n = {...prev}; delete n[serial]; return n; });
+      setMessage({
+        type: 'error',
+        text: error.response?.data?.detail || `Download latest failed: ${error.message}`
+      });
+      setTimeout(() => setMessage(null), 8000);
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  const handleDownloadSelected = async (serial) => {
+    const selected = selectedFiles[serial];
+    if (!selected || selected.size === 0) {
+      setMessage({ type: 'error', text: 'No files selected' });
+      setTimeout(() => setMessage(null), 3000);
+      return;
+    }
+
+    const camera = cameras.find(c => c.serial === serial);
+    if (!camera) return;
+
+    const files = Array.from(selected).map(key => {
+      const [directory, ...rest] = key.split('/');
+      return { directory, filename: rest.join('/') };
+    });
+
+    setDownloading(true);
+    setDownloadProgress(prev => ({
+      ...prev,
+      [serial]: { filename: 'Initializing...', current: 0, total: files.length, percent: 0 }
+    }));
+    setMessage({ type: 'info', text: `Downloading ${files.length} selected file(s) from ${camera.name || `GoPro ${serial}`}...` });
+
+    try {
+      const response = await axios.post(`${apiUrl}/api/download/${serial}/selected`, { files }, { timeout: 600000 });
+      setMessage({
+        type: 'success',
+        text: `Downloaded ${response.data.files_count} file(s)!`
+      });
+      setDownloadProgress(prev => { const n = {...prev}; delete n[serial]; return n; });
+      setSelectedFiles(prev => ({ ...prev, [serial]: new Set() }));
+      fetchDownloadedFiles();
+      setTimeout(() => setMessage(null), 5000);
+    } catch (error) {
+      setDownloadProgress(prev => { const n = {...prev}; delete n[serial]; return n; });
+      setMessage({
+        type: 'error',
+        text: error.response?.data?.detail || `Selective download failed: ${error.message}`
+      });
+      setTimeout(() => setMessage(null), 8000);
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  const toggleFileSelection = (serial, directory, filename) => {
+    const key = `${directory}/${filename}`;
+    setSelectedFiles(prev => {
+      const current = new Set(prev[serial] || []);
+      if (current.has(key)) {
+        current.delete(key);
+      } else {
+        current.add(key);
+      }
+      return { ...prev, [serial]: current };
+    });
+  };
+
+  const toggleSelectAll = (serial) => {
+    const browse = browseFiles[serial];
+    if (!browse) return;
+    const allFiles = [...(browse.videos || []), ...(browse.others || [])];
+    const allKeys = allFiles.map(f => `${f.directory}/${f.filename}`);
+    const current = selectedFiles[serial] || new Set();
+
+    if (current.size === allKeys.length) {
+      // Deselect all
+      setSelectedFiles(prev => ({ ...prev, [serial]: new Set() }));
+    } else {
+      // Select all
+      setSelectedFiles(prev => ({ ...prev, [serial]: new Set(allKeys) }));
+    }
+  };
+
+  const handleEraseCamera = async (serial) => {
+    setErasing(serial);
+    setEraseConfirm(null);
+    setEraseInput('');
+    setMessage({ type: 'info', text: `Erasing SD card on camera ${serial}...` });
+
+    try {
+      await axios.post(`${apiUrl}/api/cameras/${serial}/erase-sd`, null, { timeout: 120000 });
+      setMessage({ type: 'success', text: `SD card erased on camera ${serial}` });
+      setBrowseFiles(prev => { const n = {...prev}; delete n[serial]; return n; });
+      setTimeout(() => setMessage(null), 5000);
+    } catch (error) {
+      setMessage({
+        type: 'error',
+        text: error.response?.data?.detail || `Erase failed: ${error.message}`
+      });
+      setTimeout(() => setMessage(null), 8000);
+    } finally {
+      setErasing(null);
+    }
+  };
+
+  const handleDisconnectCamera = async (serial) => {
+    try {
+      await axios.post(`${apiUrl}/api/cameras/disconnect/${serial}`);
+      setMessage({ type: 'success', text: `Camera ${serial} disconnected` });
+      setTimeout(() => setMessage(null), 3000);
+    } catch (error) {
+      setMessage({
+        type: 'error',
+        text: error.response?.data?.detail || `Disconnect failed: ${error.message}`
+      });
+      setTimeout(() => setMessage(null), 5000);
+    }
   };
 
   const handleTestS3Backend = async () => {
@@ -912,14 +1110,23 @@ function DownloadUpload({ cameras, apiUrl, downloadWsMessage, activeShoot }) {
             </div>
 
             <div className="cameras-download-grid">
-              {connectedCameras.map((camera) => (
-                <div key={camera.serial} className="download-card">
+              {sortedCameras.map((camera) => (
+                <div key={camera.serial} className={`download-card ${!camera.connected ? 'download-card-disconnected' : ''}`}>
                   <div className="download-card-header">
                     <h3>{camera.name || `GoPro ${camera.serial}`}</h3>
-                    <span className="serial-badge">{camera.serial}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      {!camera.connected && (
+                        <span className="not-connected-badge">Not Connected</span>
+                      )}
+                      <span className="serial-badge">{camera.serial}</span>
+                    </div>
                   </div>
 
-                  {downloadProgress[camera.serial] ? (
+                  {!camera.connected ? (
+                    <div className="download-card-disconnected-body">
+                      <span className="disconnected-label">Connect this camera in Camera Management to download files.</span>
+                    </div>
+                  ) : downloadProgress[camera.serial] ? (
                     <div className="download-progress-box">
                       <div className="progress-info">
                         <span>Downloading: {downloadProgress[camera.serial].filename}</span>
@@ -938,13 +1145,131 @@ function DownloadUpload({ cameras, apiUrl, downloadWsMessage, activeShoot }) {
                       </div>
                     </div>
                   ) : (
-                    <button
-                      className="btn btn-primary"
-                      onClick={() => handleDownloadFromCamera(camera.serial)}
-                      disabled={downloading}
-                    >
-                      Download {maxFiles ? `Last ${maxFiles}` : 'All'} Files
-                    </button>
+                    <div className="download-card-actions">
+                      <button
+                        className="btn btn-primary btn-sm"
+                        onClick={() => handleDownloadFromCamera(camera.serial)}
+                        disabled={downloading}
+                      >
+                        Download {maxFiles ? `Last ${maxFiles}` : 'All'}
+                      </button>
+                      <button
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => handleDownloadLatest(camera.serial)}
+                        disabled={downloading}
+                      >
+                        Download Latest
+                      </button>
+                      <button
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => handleBrowseCamera(camera.serial)}
+                        disabled={downloading || browsing === camera.serial}
+                      >
+                        {browsing === camera.serial ? 'Scanning...' : 'Browse SD'}
+                      </button>
+                      <button
+                        className="btn btn-danger btn-sm"
+                        onClick={() => { setEraseConfirm(camera.serial); setEraseInput(''); }}
+                        disabled={downloading || erasing === camera.serial}
+                      >
+                        {erasing === camera.serial ? 'Erasing...' : 'Erase SD'}
+                      </button>
+                      <button
+                        className="btn btn-secondary btn-sm btn-disconnect"
+                        onClick={() => handleDisconnectCamera(camera.serial)}
+                        disabled={downloading}
+                        title="Disconnect BLE"
+                      >
+                        Disconnect
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Erase Confirmation */}
+                  {camera.connected && eraseConfirm === camera.serial && (
+                    <div className="erase-confirm-box">
+                      <p className="erase-confirm-text">
+                        Type <strong>ERASE</strong> to confirm erasing all media from this camera:
+                      </p>
+                      <div className="erase-confirm-row">
+                        <input
+                          type="text"
+                          value={eraseInput}
+                          onChange={(e) => setEraseInput(e.target.value)}
+                          placeholder="Type ERASE"
+                          className="erase-confirm-input"
+                        />
+                        <button
+                          className="btn btn-danger btn-sm"
+                          onClick={() => handleEraseCamera(camera.serial)}
+                          disabled={eraseInput !== 'ERASE'}
+                        >
+                          Confirm
+                        </button>
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => { setEraseConfirm(null); setEraseInput(''); }}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Browse Results */}
+                  {camera.connected && browseFiles[camera.serial] && (
+                    <div className="browse-results">
+                      <div className="browse-summary">
+                        {browseFiles[camera.serial].total_files} files ({browseFiles[camera.serial].total_size_human})
+                        {' - '}
+                        {browseFiles[camera.serial].video_count} videos, {browseFiles[camera.serial].other_count} other
+                      </div>
+                      <div className="browse-select-bar">
+                        <label className="browse-select-all">
+                          <input
+                            type="checkbox"
+                            checked={
+                              (selectedFiles[camera.serial]?.size || 0) ===
+                              (browseFiles[camera.serial].total_files || 0)
+                            }
+                            onChange={() => toggleSelectAll(camera.serial)}
+                          />
+                          Select All
+                        </label>
+                        {(selectedFiles[camera.serial]?.size || 0) > 0 && (
+                          <button
+                            className="btn btn-primary btn-sm"
+                            onClick={() => handleDownloadSelected(camera.serial)}
+                            disabled={downloading}
+                          >
+                            Download {selectedFiles[camera.serial].size} Selected
+                          </button>
+                        )}
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => setBrowseFiles(prev => { const n = {...prev}; delete n[camera.serial]; return n; })}
+                        >
+                          Close
+                        </button>
+                      </div>
+                      <div className="browse-file-list">
+                        {[...(browseFiles[camera.serial].videos || []), ...(browseFiles[camera.serial].others || [])].map((file, idx) => {
+                          const fileKey = `${file.directory}/${file.filename}`;
+                          const isSelected = selectedFiles[camera.serial]?.has(fileKey) || false;
+                          return (
+                            <label key={idx} className={`browse-file-item ${isSelected ? 'selected' : ''}`}>
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => toggleFileSelection(camera.serial, file.directory, file.filename)}
+                              />
+                              <span className="browse-file-name">{file.filename}</span>
+                              <span className="browse-file-size">{file.size_human}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
                   )}
                 </div>
               ))}

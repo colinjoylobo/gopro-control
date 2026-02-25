@@ -93,13 +93,47 @@ class DownloadManager:
             return []
 
     def get_media_summary(self) -> Dict:
-        """Get summary of media on camera (count + total size)"""
-        files = self.get_media_list()
-        total_size = sum(f["size"] for f in files)
+        """Get summary of media on camera with full file details"""
+        media_list = self.get_media_list()
+
+        if not media_list:
+            return {
+                "total_files": 0,
+                "total_size_bytes": 0,
+                "total_size_human": format_size(0),
+                "video_count": 0,
+                "videos": [],
+                "other_count": 0,
+                "others": []
+            }
+
+        videos = []
+        others = []
+
+        for f in media_list:
+            entry = {
+                "directory": f["directory"],
+                "filename": f["filename"],
+                "size": f["size"],
+                "size_human": format_size(f["size"]),
+                "mod_time": f["mod_time"],
+                "url": f["url"]
+            }
+            if f["filename"].upper().endswith(".MP4"):
+                videos.append(entry)
+            else:
+                others.append(entry)
+
+        total_size = sum(f["size"] for f in media_list)
+
         return {
-            "file_count": len(files),
+            "total_files": len(media_list),
             "total_size_bytes": total_size,
-            "total_size_human": format_size(total_size)
+            "total_size_human": format_size(total_size),
+            "video_count": len(videos),
+            "videos": videos,
+            "other_count": len(others),
+            "others": others
         }
 
     def erase_all_media(self) -> bool:
@@ -248,6 +282,131 @@ class DownloadManager:
 
         except Exception as e:
             logger.error(f"❌ Download all failed: {e}", exc_info=True)
+            return downloaded_files
+
+    def download_latest_from_camera(
+        self,
+        serial: str,
+        progress_callback: Optional[Callable[[str, int, int, int], None]] = None,
+        shoot_name: Optional[str] = None,
+        take_number: Optional[int] = None
+    ) -> List[Path]:
+        """
+        Download only the latest video (.MP4) from camera
+        progress_callback(filename, current_file_idx, total_files, percent)
+        """
+        downloaded_files = []
+
+        try:
+            logger.info("=" * 60)
+            logger.info(f"Starting latest video download for camera {serial}")
+
+            media_list = self.get_media_list()
+
+            if not media_list:
+                logger.warning("No media files found on camera")
+                return []
+
+            # Filter to .MP4 files only
+            video_files = [f for f in media_list if f["filename"].upper().endswith(".MP4")]
+
+            if not video_files:
+                logger.warning("No .MP4 video files found on camera")
+                return []
+
+            latest = video_files[0]
+            filename = latest["filename"]
+            url = latest["url"]
+
+            try:
+                size_bytes = int(latest.get("size", 0))
+                size_mb = size_bytes / (1024 * 1024)
+            except (ValueError, TypeError):
+                size_mb = 0
+
+            logger.info(f"Latest video: {filename} ({size_mb:.1f} MB)")
+
+            if shoot_name and take_number is not None:
+                safe_name = self._sanitize_filename(shoot_name)
+                output_path = self.download_dir / safe_name / f"Take_{take_number:02d}" / f"GoPro{serial}" / filename
+            else:
+                today = datetime.now().strftime("%Y-%m-%d")
+                output_path = self.download_dir / f"{today}_GoPro{serial}" / filename
+
+            def file_progress(downloaded: int, total: int):
+                if progress_callback:
+                    percent = int((downloaded / total) * 100) if total > 0 else 0
+                    progress_callback(filename, 1, 1, percent)
+
+            success = self.download_file(url, output_path, file_progress)
+
+            if success:
+                downloaded_files.append(output_path)
+                logger.info(f"  Downloaded successfully")
+            else:
+                logger.error(f"  Download failed")
+
+            return downloaded_files
+
+        except Exception as e:
+            logger.error(f"Download latest failed: {e}", exc_info=True)
+            return downloaded_files
+
+    def download_selected_from_camera(
+        self,
+        serial: str,
+        file_list: List[Dict],
+        progress_callback: Optional[Callable[[str, int, int, int], None]] = None,
+        shoot_name: Optional[str] = None,
+        take_number: Optional[int] = None
+    ) -> List[Path]:
+        """
+        Download selected files from camera.
+        file_list: list of {directory, filename} dicts
+        progress_callback(filename, current_file_idx, total_files, percent)
+        """
+        downloaded_files = []
+
+        try:
+            total_files = len(file_list)
+            logger.info("=" * 60)
+            logger.info(f"Downloading {total_files} selected file(s) for camera {serial}")
+
+            if shoot_name and take_number is not None:
+                safe_name = self._sanitize_filename(shoot_name)
+                output_base = self.download_dir / safe_name / f"Take_{take_number:02d}" / f"GoPro{serial}"
+            else:
+                today = datetime.now().strftime("%Y-%m-%d")
+                output_base = self.download_dir / f"{today}_GoPro{serial}"
+
+            for idx, file_info in enumerate(file_list, 1):
+                directory = file_info["directory"]
+                filename = file_info["filename"]
+                url = f"{GOPRO_IP}/videos/DCIM/{directory}/{filename}"
+
+                logger.info(f"[{idx}/{total_files}] {filename}")
+
+                output_path = output_base / filename
+
+                def file_progress(downloaded: int, total: int):
+                    if progress_callback:
+                        percent = int((downloaded / total) * 100) if total > 0 else 0
+                        progress_callback(filename, idx, total_files, percent)
+
+                success = self.download_file(url, output_path, file_progress)
+
+                if success:
+                    downloaded_files.append(output_path)
+                    logger.info(f"  Downloaded successfully")
+                else:
+                    logger.error(f"  Download failed")
+
+            logger.info("=" * 60)
+            logger.info(f"Selected download complete: {len(downloaded_files)}/{total_files} files")
+            return downloaded_files
+
+        except Exception as e:
+            logger.error(f"Selected download failed: {e}", exc_info=True)
             return downloaded_files
 
     async def upload_file_to_backend(
