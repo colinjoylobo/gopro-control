@@ -6,51 +6,51 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 1.5rem;
+  margin-bottom: var(--space-xl);
 }
 
 .button-group {
   display: flex;
-  gap: 0.75rem;
+  gap: var(--space-md);
 }
 
 .add-camera-form {
-  background: #1a1a1a;
-  padding: 1.5rem;
-  border-radius: 8px;
-  margin-bottom: 1.5rem;
+  background: var(--bg-base);
+  padding: var(--space-xl);
+  border-radius: var(--radius-lg);
+  margin-bottom: var(--space-xl);
 }
 
 .form-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 1rem;
-  margin-bottom: 1rem;
+  gap: var(--space-lg);
+  margin-bottom: var(--space-lg);
 }
 
 .empty-state {
   text-align: center;
   padding: 3rem;
-  color: #888;
+  color: var(--text-dimmed);
 }
 
 .cameras-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
-  gap: 1.5rem;
-  margin-top: 1.5rem;
+  gap: var(--space-xl);
+  margin-top: var(--space-xl);
 }
 
 .camera-card {
-  background: #1a1a1a;
-  border: 2px solid #3a3a3a;
-  border-radius: 12px;
-  padding: 1.5rem;
+  background: var(--bg-base);
+  border: 2px solid var(--border-default);
+  border-radius: var(--radius-xl);
+  padding: var(--space-xl);
   transition: all 0.3s ease;
 }
 
 .camera-card:hover {
-  border-color: #667eea;
+  border-color: var(--accent);
   transform: translateY(-2px);
   box-shadow: 0 6px 12px rgba(102, 126, 234, 0.1);
 }
@@ -59,24 +59,24 @@
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  margin-bottom: 1rem;
+  margin-bottom: var(--space-lg);
 }
 
 .camera-header h3 {
   margin: 0;
   font-size: 1.25rem;
-  color: white;
+  color: var(--text-primary);
 }
 
 .camera-serial {
-  color: #888;
+  color: var(--text-dimmed);
   font-size: 0.875rem;
-  margin: 0.25rem 0 0 0;
+  margin: var(--space-xs) 0 0 0;
 }
 
 .connection-badge {
   padding: 0.35rem 0.75rem;
-  border-radius: 20px;
+  border-radius: var(--radius-pill);
   font-size: 0.75rem;
   font-weight: 600;
   text-transform: uppercase;
@@ -85,8 +85,8 @@
 
 .connection-badge.connected {
   background: rgba(16, 185, 129, 0.2);
-  color: #10b981;
-  border: 1px solid #10b981;
+  color: var(--success);
+  border: 1px solid var(--success);
 }
 
 .connection-badge.disconnected {
@@ -96,14 +96,14 @@
 }
 
 .camera-info {
-  margin: 1rem 0;
+  margin: var(--space-lg) 0;
 }
 
 .info-row {
   display: flex;
   justify-content: space-between;
-  padding: 0.5rem 0;
-  border-bottom: 1px solid #3a3a3a;
+  padding: var(--space-sm) 0;
+  border-bottom: 1px solid var(--border-default);
 }
 
 .info-row:last-child {
@@ -111,58 +111,58 @@
 }
 
 .info-row .label {
-  color: #888;
+  color: var(--text-dimmed);
   font-size: 0.875rem;
 }
 
 .info-row .value {
-  color: white;
+  color: var(--text-primary);
   font-weight: 500;
   font-size: 0.875rem;
 }
 
 .btn-sm {
-  padding: 0.5rem 1rem;
+  padding: var(--space-sm) var(--space-lg);
   font-size: 0.875rem;
   width: 100%;
-  margin-top: 0.5rem;
+  margin-top: var(--space-sm);
 }
 
 .discovered-cameras {
   background: rgba(102, 126, 234, 0.1);
-  border: 2px solid #667eea;
-  border-radius: 12px;
-  padding: 1.5rem;
-  margin-bottom: 1.5rem;
+  border: 2px solid var(--accent);
+  border-radius: var(--radius-xl);
+  padding: var(--space-xl);
+  margin-bottom: var(--space-xl);
 }
 
 .discovered-cameras h3 {
-  margin: 0 0 0.5rem 0;
-  color: #667eea;
+  margin: 0 0 var(--space-sm) 0;
+  color: var(--accent);
   font-size: 1.25rem;
 }
 
 .discovered-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 1rem;
-  margin-top: 1rem;
+  gap: var(--space-lg);
+  margin-top: var(--space-lg);
 }
 
 .discovered-camera-card {
-  background: #2a2a2a;
-  border: 2px solid #3a3a3a;
-  border-radius: 8px;
-  padding: 1rem;
+  background: var(--bg-surface);
+  border: 2px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  padding: var(--space-lg);
   cursor: pointer;
   transition: all 0.3s ease;
   display: flex;
   align-items: center;
-  gap: 1rem;
+  gap: var(--space-lg);
 }
 
 .discovered-camera-card:hover {
-  border-color: #667eea;
+  border-color: var(--accent);
   background: rgba(102, 126, 234, 0.1);
   transform: translateY(-2px);
 }
@@ -182,25 +182,25 @@
 
 .discovered-name {
   font-weight: 600;
-  color: white;
+  color: var(--text-primary);
   font-size: 1rem;
-  margin-bottom: 0.25rem;
+  margin-bottom: var(--space-xs);
 }
 
 .discovered-serial {
   font-size: 0.875rem;
-  color: #aaa;
-  margin-bottom: 0.25rem;
+  color: var(--text-muted);
+  margin-bottom: var(--space-xs);
 }
 
 .discovered-address {
   font-size: 0.75rem;
-  color: #666;
-  font-family: monospace;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
 }
 
 .discovered-action {
-  color: #667eea;
+  color: var(--accent);
   font-size: 0.875rem;
   font-weight: 600;
   opacity: 0.7;
@@ -244,29 +244,29 @@
 
 /* Erase Modal Card */
 .erase-modal {
-  background: #1e1e1e;
-  border: 1px solid #3a3a3a;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
   border-radius: 16px;
-  padding: 2rem;
+  padding: var(--space-2xl);
   width: 90%;
   max-width: 480px;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
 }
 
 .erase-modal h2 {
-  margin: 0 0 0.5rem 0;
-  color: white;
+  margin: 0 0 var(--space-sm) 0;
+  color: var(--text-primary);
   font-size: 1.5rem;
 }
 
 /* Erase Modal Stats */
 .erase-modal-stats {
   display: flex;
-  gap: 1.5rem;
-  margin-bottom: 1.5rem;
-  padding: 1rem;
-  background: #2a2a2a;
-  border-radius: 8px;
+  gap: var(--space-xl);
+  margin-bottom: var(--space-xl);
+  padding: var(--space-lg);
+  background: var(--bg-surface);
+  border-radius: var(--radius-lg);
 }
 
 .erase-stat {
@@ -279,15 +279,15 @@
 .erase-stat-value {
   font-size: 1.5rem;
   font-weight: 700;
-  color: white;
+  color: var(--text-primary);
 }
 
 .erase-stat-label {
   font-size: 0.75rem;
-  color: #888;
+  color: var(--text-dimmed);
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  margin-top: 0.25rem;
+  margin-top: var(--space-xs);
 }
 
 /* Erase Modal Warning */
@@ -295,9 +295,9 @@
   background: rgba(220, 38, 38, 0.15);
   border: 1px solid rgba(220, 38, 38, 0.4);
   color: #fca5a5;
-  padding: 1rem;
-  border-radius: 8px;
-  margin-bottom: 1.5rem;
+  padding: var(--space-lg);
+  border-radius: var(--radius-lg);
+  margin-bottom: var(--space-xl);
   font-size: 0.9rem;
   line-height: 1.5;
 }
@@ -305,13 +305,13 @@
 /* Erase Confirm Input */
 .erase-confirm-input {
   width: 100%;
-  padding: 0.75rem 1rem;
-  background: #2a2a2a;
-  border: 2px solid #3a3a3a;
-  border-radius: 8px;
-  color: white;
+  padding: var(--space-md) var(--space-lg);
+  background: var(--bg-surface);
+  border: 2px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  color: var(--text-primary);
   font-size: 1rem;
-  font-family: monospace;
+  font-family: var(--font-mono);
   box-sizing: border-box;
   transition: border-color 0.2s;
 }
@@ -322,16 +322,16 @@
 }
 
 .erase-confirm-input::placeholder {
-  color: #555;
+  color: var(--border-input);
 }
 
 /* Erase Confirm Button */
 .btn-erase-confirm {
-  background: #dc2626;
-  color: white;
+  background: var(--danger-dark);
+  color: var(--text-primary);
   border: none;
-  padding: 0.75rem 1.5rem;
-  border-radius: 8px;
+  padding: var(--space-md) var(--space-xl);
+  border-radius: var(--radius-lg);
   font-weight: 600;
   cursor: pointer;
   transition: background 0.2s;
@@ -343,7 +343,7 @@
 
 .btn-erase-confirm:disabled {
   background: #4a1a1a;
-  color: #888;
+  color: var(--text-dimmed);
   cursor: not-allowed;
 }
 
@@ -351,7 +351,7 @@
 .erase-spinner {
   width: 40px;
   height: 40px;
-  border: 3px solid #3a3a3a;
+  border: 3px solid var(--border-default);
   border-top-color: #f97316;
   border-radius: 50%;
   animation: erase-spin 0.8s linear infinite;

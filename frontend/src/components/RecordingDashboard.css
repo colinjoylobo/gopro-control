@@ -6,14 +6,14 @@
 .dashboard-top-bar {
   display: flex;
   align-items: center;
-  gap: 1.5rem;
+  gap: var(--space-xl);
   flex-wrap: wrap;
 }
 
 .top-bar-left {
   display: flex;
   align-items: center;
-  gap: 1rem;
+  gap: var(--space-lg);
 }
 
 .top-bar-center {
@@ -30,16 +30,16 @@
 .recording-indicator {
   display: inline-flex;
   align-items: center;
-  gap: 0.75rem;
-  padding: 0.75rem 1.5rem;
-  background: #1a1a1a;
-  border: 2px solid #3a3a3a;
-  border-radius: 12px;
+  gap: var(--space-md);
+  padding: var(--space-md) var(--space-xl);
+  background: var(--bg-base);
+  border: 2px solid var(--border-default);
+  border-radius: var(--radius-xl);
   transition: all 0.3s ease;
 }
 
 .recording-indicator.active {
-  border-color: #ef4444;
+  border-color: var(--danger);
   background: rgba(239, 68, 68, 0.1);
   animation: recordingPulse 2s infinite;
 }
@@ -52,7 +52,7 @@
 .pulse-dot {
   width: 12px;
   height: 12px;
-  background: #ef4444;
+  background: var(--danger);
   border-radius: 50%;
   animation: pulse 1.5s infinite;
 }
@@ -66,46 +66,46 @@
   font-size: 1.25rem;
   font-weight: 700;
   letter-spacing: 2px;
-  color: white;
+  color: var(--text-primary);
 }
 
 .recording-timer {
   font-size: 1.5rem;
   font-weight: 700;
-  font-family: 'Courier New', monospace;
-  color: #ef4444;
-  padding: 0.5rem 1rem;
+  font-family: var(--font-mono);
+  color: var(--danger);
+  padding: var(--space-sm) var(--space-lg);
   background: rgba(239, 68, 68, 0.1);
-  border-radius: 8px;
-  border: 1px solid #ef4444;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--danger);
 }
 
 .recording-controls {
   display: flex;
-  gap: 1rem;
+  gap: var(--space-lg);
 }
 
 .btn-record, .btn-stop {
-  padding: 0.75rem 1.5rem;
+  padding: var(--space-md) var(--space-xl);
   font-size: 1rem;
   font-weight: 700;
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: var(--space-sm);
   min-width: 180px;
   justify-content: center;
 }
 
 .btn-record {
-  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  background: linear-gradient(135deg, var(--success) 0%, var(--success-dark) 100%);
 }
 
 .btn-record.recording {
-  background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+  background: linear-gradient(135deg, var(--danger) 0%, var(--danger-dark) 100%);
 }
 
 .btn-stop {
-  background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+  background: linear-gradient(135deg, var(--danger) 0%, var(--danger-dark) 100%);
 }
 
 .record-icon, .stop-icon {
@@ -116,7 +116,7 @@
   width: 16px;
   height: 16px;
   border: 2px solid rgba(255, 255, 255, 0.3);
-  border-top-color: white;
+  border-top-color: var(--text-primary);
   border-radius: 50%;
   animation: spin 1s linear infinite;
 }
@@ -128,7 +128,7 @@
 /* Camera Count Badges */
 .cam-count-badges {
   display: flex;
-  gap: 0.5rem;
+  gap: var(--space-sm);
   flex-wrap: wrap;
 }
 
@@ -142,13 +142,13 @@
 
 .cam-badge.total {
   background: rgba(102, 126, 234, 0.15);
-  color: #667eea;
+  color: var(--accent);
   border: 1px solid rgba(102, 126, 234, 0.3);
 }
 
 .cam-badge.connected {
   background: rgba(16, 185, 129, 0.15);
-  color: #10b981;
+  color: var(--success);
   border: 1px solid rgba(16, 185, 129, 0.3);
 }
 
@@ -160,7 +160,7 @@
 
 .cam-badge.recording.active {
   background: rgba(239, 68, 68, 0.15);
-  color: #ef4444;
+  color: var(--danger);
   border: 1px solid rgba(239, 68, 68, 0.3);
   animation: pulse 1.5s infinite;
 }
@@ -170,21 +170,21 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  border-left: 4px solid #667eea;
+  border-left: 4px solid var(--accent);
 }
 
 .shoot-badges {
   display: flex;
-  gap: 0.75rem;
+  gap: var(--space-md);
   align-items: center;
   flex-wrap: wrap;
 }
 
 .shoot-name-badge {
   padding: 0.35rem 0.75rem;
-  border: 2px solid #667eea;
+  border: 2px solid var(--accent);
   border-radius: 16px;
-  color: #667eea;
+  color: var(--accent);
   font-weight: 700;
   font-size: 0.9rem;
   background: rgba(102, 126, 234, 0.1);
@@ -192,9 +192,9 @@
 
 .shoot-take-badge {
   padding: 0.35rem 0.75rem;
-  border: 2px solid #ef4444;
+  border: 2px solid var(--danger);
   border-radius: 16px;
-  color: #ef4444;
+  color: var(--danger);
   font-weight: 700;
   font-size: 0.85rem;
   background: rgba(239, 68, 68, 0.1);
@@ -202,51 +202,51 @@
 
 .shoot-bar-actions {
   display: flex;
-  gap: 0.5rem;
+  gap: var(--space-sm);
 }
 
 /* Compact Shoot Panel */
 .shoot-panel-compact {
-  border-left: 4px solid #667eea;
+  border-left: 4px solid var(--accent);
 }
 
 .create-shoot-row {
   display: flex;
-  gap: 0.75rem;
+  gap: var(--space-md);
   align-items: center;
 }
 
 .shoot-name-input {
   flex: 1;
-  padding: 0.5rem 0.75rem;
-  background: #1a1a1a;
-  border: 2px solid #3a3a3a;
-  border-radius: 8px;
-  color: white;
+  padding: var(--space-sm) var(--space-md);
+  background: var(--bg-base);
+  border: 2px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  color: var(--text-primary);
   font-size: 0.85rem;
 }
 
 .shoot-name-input:focus {
-  border-color: #667eea;
+  border-color: var(--accent);
   outline: none;
 }
 
 .shoot-name-input::placeholder {
-  color: #666;
+  color: var(--text-faint);
 }
 
 .shoot-select {
-  padding: 0.5rem 0.75rem;
-  background: #1a1a1a;
-  border: 2px solid #3a3a3a;
-  border-radius: 8px;
-  color: white;
+  padding: var(--space-sm) var(--space-md);
+  background: var(--bg-base);
+  border: 2px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  color: var(--text-primary);
   font-size: 0.85rem;
   cursor: pointer;
 }
 
 .shoot-select:focus {
-  border-color: #667eea;
+  border-color: var(--accent);
   outline: none;
 }
 
@@ -254,24 +254,24 @@
 .health-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-  gap: 1rem;
+  gap: var(--space-lg);
   margin-top: 0;
 }
 
 .health-card {
-  background: #1e1e1e;
-  border: 2px solid #3a3a3a;
-  border-radius: 12px;
-  padding: 1rem;
+  background: var(--bg-elevated);
+  border: 2px solid var(--border-default);
+  border-radius: var(--radius-xl);
+  padding: var(--space-lg);
   transition: all 0.3s ease;
 }
 
 .health-card:hover {
-  border-color: #667eea;
+  border-color: var(--accent);
 }
 
 .health-card.encoding {
-  border-color: #ef4444;
+  border-color: var(--danger);
   box-shadow: 0 0 12px rgba(239, 68, 68, 0.2);
 }
 
@@ -283,27 +283,27 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 0.75rem;
-  padding-bottom: 0.5rem;
-  border-bottom: 1px solid #3a3a3a;
+  margin-bottom: var(--space-md);
+  padding-bottom: var(--space-sm);
+  border-bottom: 1px solid var(--border-default);
 }
 
 .health-cam-name {
   font-weight: 700;
-  color: white;
+  color: var(--text-primary);
   font-size: 1rem;
 }
 
 .health-cam-serial {
   display: block;
   font-size: 0.75rem;
-  color: #888;
+  color: var(--text-dimmed);
   font-weight: 400;
 }
 
 .health-status-dots {
   display: flex;
-  gap: 0.5rem;
+  gap: var(--space-sm);
   align-items: center;
 }
 
@@ -315,55 +315,55 @@
 }
 
 .recording-dot-pulse {
-  background: #ef4444;
+  background: var(--danger);
   animation: pulse 1s infinite;
 }
 
 .thermal-normal {
-  background: #10b981;
+  background: var(--success);
 }
 
 .thermal-warm {
-  background: #f59e0b;
+  background: var(--warning);
 }
 
 .thermal-hot {
-  background: #ef4444;
+  background: var(--danger);
   animation: pulse 1s infinite;
 }
 
 .gps-locked {
-  background: #10b981;
+  background: var(--success);
 }
 
 .gps-none {
-  background: #555;
+  background: var(--border-input);
 }
 
 .health-disconnected {
   text-align: center;
-  color: #666;
-  padding: 1rem;
+  color: var(--text-faint);
+  padding: var(--space-lg);
   font-style: italic;
 }
 
 .health-card-body {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: var(--space-sm);
 }
 
 /* Health Rows */
 .health-row {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: var(--space-sm);
 }
 
 .health-label {
   width: 55px;
   font-size: 0.75rem;
-  color: #888;
+  color: var(--text-dimmed);
   text-transform: uppercase;
   letter-spacing: 0.5px;
   flex-shrink: 0;
@@ -372,19 +372,19 @@
 .health-bar-container {
   flex: 1;
   height: 8px;
-  background: #2a2a2a;
-  border-radius: 4px;
+  background: var(--bg-surface);
+  border-radius: var(--radius-sm);
   overflow: hidden;
 }
 
 .health-bar {
   height: 100%;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   transition: width 0.5s ease;
 }
 
 .storage-bar {
-  background: #667eea;
+  background: var(--accent);
 }
 
 .health-value {
@@ -392,11 +392,12 @@
   font-size: 0.85rem;
   font-weight: 700;
   text-align: right;
+  color: var(--text-secondary);
 }
 
 .health-drain {
   font-size: 0.7rem;
-  color: #888;
+  color: var(--text-dimmed);
   min-width: 50px;
   text-align: right;
 }
@@ -405,14 +406,14 @@
 .recording-row {
   background: rgba(239, 68, 68, 0.1);
   padding: 0.35rem 0.5rem;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   border: 1px solid rgba(239, 68, 68, 0.3);
 }
 
 .health-rec-timer {
-  font-family: 'Courier New', monospace;
+  font-family: var(--font-mono);
   font-weight: 700;
-  color: #ef4444;
+  color: var(--danger);
   font-size: 1rem;
 }
 
@@ -421,7 +422,7 @@
   display: flex;
   gap: 0.35rem;
   flex-wrap: wrap;
-  margin-top: 0.25rem;
+  margin-top: var(--space-xs);
 }
 
 .health-badge {
@@ -433,17 +434,17 @@
 
 .health-badge.ok {
   background: rgba(16, 185, 129, 0.15);
-  color: #10b981;
+  color: var(--success);
 }
 
 .health-badge.error {
   background: rgba(239, 68, 68, 0.15);
-  color: #ef4444;
+  color: var(--danger);
 }
 
 .health-badge.info {
   background: rgba(102, 126, 234, 0.1);
-  color: #667eea;
+  color: var(--accent);
 }
 
 /* ============== Quick Stats Bar ============== */
@@ -452,12 +453,12 @@
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 1rem;
+  gap: var(--space-lg);
 }
 
 .quick-stats {
   display: flex;
-  gap: 2rem;
+  gap: var(--space-2xl);
 }
 
 .quick-stat {
@@ -467,7 +468,7 @@
 
 .quick-stat-label {
   font-size: 0.7rem;
-  color: #888;
+  color: var(--text-dimmed);
   text-transform: uppercase;
   letter-spacing: 1px;
 }
@@ -475,80 +476,80 @@
 .quick-stat-value {
   font-size: 1.25rem;
   font-weight: 700;
-  color: #667eea;
-  font-family: 'Courier New', monospace;
+  color: var(--accent);
+  font-family: var(--font-mono);
 }
 
 .alerts-section {
   display: flex;
-  gap: 0.5rem;
+  gap: var(--space-sm);
   flex-wrap: wrap;
 }
 
 .alert-badge {
   padding: 0.3rem 0.75rem;
-  border-radius: 12px;
+  border-radius: var(--radius-xl);
   font-size: 0.75rem;
   font-weight: 600;
 }
 
 .alert-badge.danger {
   background: rgba(239, 68, 68, 0.15);
-  color: #ef4444;
+  color: var(--danger);
   border: 1px solid rgba(239, 68, 68, 0.3);
 }
 
 .alert-badge.warning {
   background: rgba(245, 158, 11, 0.15);
-  color: #f59e0b;
+  color: var(--warning);
   border: 1px solid rgba(245, 158, 11, 0.3);
 }
 
 /* ============== Take List ============== */
 .take-list {
   display: grid;
-  gap: 0.5rem;
+  gap: var(--space-sm);
 }
 
 .take-item {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 0.5rem 1rem;
-  background: #1a1a1a;
-  border: 1px solid #3a3a3a;
-  border-radius: 6px;
+  padding: var(--space-sm) var(--space-lg);
+  background: var(--bg-base);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
   font-size: 0.85rem;
 }
 
 .take-item.take-active {
-  border-color: #ef4444;
+  border-color: var(--danger);
   background: rgba(239, 68, 68, 0.05);
 }
 
 .take-item-header {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: var(--space-md);
 }
 
 .take-number {
-  color: white;
+  color: var(--text-primary);
   font-weight: 600;
 }
 
 .take-cameras {
-  color: #888;
+  color: var(--text-dimmed);
   font-size: 0.8rem;
 }
 
 .take-item-status {
-  color: #888;
+  color: var(--text-dimmed);
   font-size: 0.8rem;
 }
 
 .take-item.take-active .take-item-status {
-  color: #ef4444;
+  color: var(--danger);
   font-weight: 600;
 }
 
@@ -583,7 +584,7 @@
 
   .quick-stats {
     flex-direction: column;
-    gap: 0.5rem;
+    gap: var(--space-sm);
   }
 
   .create-shoot-row {
@@ -592,7 +593,7 @@
 
   .shoot-context-bar {
     flex-direction: column;
-    gap: 0.75rem;
+    gap: var(--space-md);
     align-items: flex-start;
   }
 }

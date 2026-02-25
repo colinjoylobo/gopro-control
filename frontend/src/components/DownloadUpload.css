@@ -5,26 +5,26 @@
 .form-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 1rem;
+  gap: var(--space-lg);
 }
 
 .cameras-download-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 1.5rem;
-  margin-top: 1.5rem;
+  gap: var(--space-xl);
+  margin-top: var(--space-xl);
 }
 
 .download-card {
-  background: #1a1a1a;
-  border: 2px solid #3a3a3a;
-  border-radius: 12px;
-  padding: 1.5rem;
+  background: var(--bg-base);
+  border: 2px solid var(--border-default);
+  border-radius: var(--radius-xl);
+  padding: var(--space-xl);
   transition: all 0.3s ease;
 }
 
 .download-card:hover {
-  border-color: #667eea;
+  border-color: var(--accent);
   transform: translateY(-2px);
 }
 
@@ -32,97 +32,97 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 1.5rem;
+  margin-bottom: var(--space-xl);
 }
 
 .download-card-header h3 {
   margin: 0;
   font-size: 1.1rem;
-  color: white;
+  color: var(--text-primary);
 }
 
 .serial-badge {
   padding: 0.35rem 0.75rem;
   background: rgba(102, 126, 234, 0.2);
-  color: #667eea;
-  border-radius: 20px;
+  color: var(--accent);
+  border-radius: var(--radius-pill);
   font-size: 0.75rem;
   font-weight: 600;
 }
 
 .download-progress-box {
-  padding: 1rem;
+  padding: var(--space-lg);
   background: rgba(102, 126, 234, 0.1);
-  border-radius: 8px;
-  border: 1px solid #667eea;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--accent);
 }
 
 .progress-info {
   display: flex;
   justify-content: space-between;
-  margin-bottom: 0.75rem;
+  margin-bottom: var(--space-md);
   font-size: 0.875rem;
-  color: #aaa;
+  color: var(--text-muted);
 }
 
 .progress-bar {
   width: 100%;
   height: 8px;
-  background: #2a2a2a;
-  border-radius: 4px;
+  background: var(--bg-surface);
+  border-radius: var(--radius-sm);
   overflow: hidden;
-  margin-bottom: 0.5rem;
+  margin-bottom: var(--space-sm);
 }
 
 .progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, #667eea, #764ba2);
+  background: linear-gradient(90deg, var(--accent), #764ba2);
   transition: width 0.3s ease;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .progress-percent {
   text-align: center;
   font-weight: 600;
-  color: #667eea;
+  color: var(--accent);
   font-size: 1.25rem;
 }
 
 .files-by-camera {
-  margin-top: 1.5rem;
+  margin-top: var(--space-xl);
 }
 
 .camera-files-group {
-  margin-bottom: 2rem;
+  margin-bottom: var(--space-2xl);
 }
 
 .camera-group-header {
-  padding: 0.75rem 1rem;
-  background: #1a1a1a;
-  border-left: 4px solid #667eea;
-  margin-bottom: 1rem;
+  padding: var(--space-md) var(--space-lg);
+  background: var(--bg-base);
+  border-left: 4px solid var(--accent);
+  margin-bottom: var(--space-lg);
   font-size: 1.1rem;
-  color: white;
+  color: var(--text-primary);
 }
 
 .files-list {
   display: grid;
-  gap: 0.75rem;
+  gap: var(--space-md);
 }
 
 .file-item {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 1rem 1.5rem;
-  background: #1a1a1a;
-  border: 2px solid #3a3a3a;
-  border-radius: 8px;
+  padding: var(--space-lg) var(--space-xl);
+  background: var(--bg-base);
+  border: 2px solid var(--border-default);
+  border-radius: var(--radius-lg);
   transition: all 0.3s ease;
 }
 
 .file-item:hover {
-  border-color: #667eea;
+  border-color: var(--accent);
   background: rgba(102, 126, 234, 0.05);
 }
 
@@ -131,35 +131,35 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-right: 1rem;
+  margin-right: var(--space-lg);
 }
 
 .file-name {
   font-weight: 500;
-  color: white;
+  color: var(--text-primary);
   font-size: 0.95rem;
 }
 
 .file-size {
-  color: #888;
+  color: var(--text-dimmed);
   font-size: 0.875rem;
-  margin-left: 1rem;
+  margin-left: var(--space-lg);
 }
 
 .btn-sm {
-  padding: 0.5rem 1rem;
+  padding: var(--space-sm) var(--space-lg);
   font-size: 0.875rem;
   white-space: nowrap;
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: var(--space-sm);
 }
 
 .spinner-small {
   width: 14px;
   height: 14px;
   border: 2px solid rgba(255, 255, 255, 0.3);
-  border-top-color: white;
+  border-top-color: var(--text-primary);
   border-radius: 50%;
   animation: spin 1s linear infinite;
 }
@@ -173,28 +173,28 @@
 .empty-state {
   text-align: center;
   padding: 3rem;
-  color: #888;
+  color: var(--text-dimmed);
 }
 
 .instructions-list {
-  margin: 1rem 0;
-  padding-left: 1.5rem;
-  color: #aaa;
+  margin: var(--space-lg) 0;
+  padding-left: var(--space-xl);
+  color: var(--text-muted);
   line-height: 1.8;
 }
 
 .instructions-list li {
-  margin-bottom: 0.75rem;
+  margin-bottom: var(--space-md);
 }
 
 /* WiFi Warning Card */
 .wifi-warning-card {
-  background: #fff3cd;
-  border-color: #ffc107;
+  background: rgba(245, 158, 11, 0.1);
+  border-color: var(--warning);
 }
 
 .wifi-warning-card h2 {
-  color: #856404;
+  color: var(--warning);
 }
 
 .wifi-warning-content {
@@ -204,28 +204,28 @@
 }
 
 .wifi-warning-text {
-  margin-bottom: 1rem;
-  color: #856404;
+  margin-bottom: var(--space-lg);
+  color: var(--warning);
 }
 
 .btn-wifi-disconnect {
-  background: #ffc107;
-  color: #000;
+  background: var(--warning);
+  color: var(--bg-black);
   border: none;
   font-weight: bold;
 }
 
 .wifi-warning-footer {
-  margin-top: 1rem;
+  margin-top: var(--space-lg);
   font-size: 0.9rem;
-  color: #856404;
+  color: var(--warning);
 }
 
 /* WiFi Status Box */
 .wifi-status-box {
-  padding: 1rem;
-  background: #f8f9fa;
-  border-radius: 6px;
+  padding: var(--space-lg);
+  background: var(--bg-surface);
+  border-radius: var(--radius-md);
 }
 
 .wifi-status-row {
@@ -235,17 +235,17 @@
 }
 
 .wifi-name--gopro {
-  color: #dc3545;
+  color: var(--danger);
   font-weight: bold;
 }
 
 .wifi-name--internet {
-  color: #28a745;
+  color: var(--success);
   font-weight: bold;
 }
 
 .wifi-name--disconnected {
-  color: #6c757d;
+  color: var(--text-dimmed);
   font-weight: bold;
 }
 
@@ -255,124 +255,127 @@
 }
 
 .wifi-hint--internet {
-  margin-top: 0.5rem;
-  color: #28a745;
+  margin-top: var(--space-sm);
+  color: var(--success);
   font-size: 0.9rem;
 }
 
 .wifi-hint--gopro {
-  margin-top: 0.5rem;
-  color: #dc3545;
+  margin-top: var(--space-sm);
+  color: var(--danger);
   font-size: 0.9rem;
 }
 
 /* Test S3 button */
 .btn-test-s3 {
-  margin-top: 1rem;
+  margin-top: var(--space-lg);
 }
 
 /* Download Limit Input */
 .download-limit-group {
-  margin-bottom: 1rem;
+  margin-bottom: var(--space-lg);
 }
 
 .download-limit-label {
   display: block;
-  margin-bottom: 0.5rem;
+  margin-bottom: var(--space-sm);
   font-weight: 500;
+  color: var(--text-muted);
 }
 
 .download-limit-input {
   width: 100%;
-  padding: 0.5rem;
-  border-radius: 6px;
-  border: 1px solid #ddd;
+  padding: var(--space-sm);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-input);
+  background: var(--bg-base);
+  color: var(--text-primary);
   font-size: 1rem;
 }
 
 .download-limit-hint {
   display: block;
-  margin-top: 0.25rem;
-  color: #666;
+  margin-top: var(--space-xs);
+  color: var(--text-dimmed);
 }
 
 /* Bulk Download Progress Card */
 .bulk-progress-card {
-  background: #e7f3ff;
-  border: 2px solid #667eea;
-  margin-top: 1rem;
+  background: rgba(102, 126, 234, 0.1);
+  border: 2px solid var(--accent);
+  margin-top: var(--space-lg);
 }
 
 .bulk-progress-title {
-  color: #667eea;
-  margin-bottom: 1rem;
+  color: var(--accent);
+  margin-bottom: var(--space-lg);
 }
 
 .bulk-progress-camera {
-  margin-bottom: 0.5rem;
+  margin-bottom: var(--space-sm);
   font-size: 1.1rem;
   font-weight: bold;
-  color: #333;
+  color: var(--text-secondary);
 }
 
 .bulk-progress-bar {
-  margin-bottom: 0.5rem;
+  margin-bottom: var(--space-sm);
 }
 
 .bulk-progress-detail {
-  margin-top: 1rem;
-  padding: 0.75rem;
-  background: white;
-  border-radius: 6px;
+  margin-top: var(--space-lg);
+  padding: var(--space-md);
+  background: var(--bg-surface);
+  border-radius: var(--radius-md);
 }
 
 .bulk-progress-detail-text {
-  margin-bottom: 0.5rem;
-  color: #666;
+  margin-bottom: var(--space-sm);
+  color: var(--text-dimmed);
 }
 
 .bulk-progress-percent {
   text-align: center;
-  margin-top: 0.25rem;
+  margin-top: var(--space-xs);
   font-weight: bold;
 }
 
 /* Download All Button */
 .download-all-wrapper {
-  margin-top: 1rem;
-  margin-bottom: 1rem;
+  margin-top: var(--space-lg);
+  margin-bottom: var(--space-lg);
 }
 
 .btn-download-all {
   width: 100%;
-  padding: 1rem;
+  padding: var(--space-lg);
   font-size: 1.1rem;
   font-weight: bold;
 }
 
 .btn-download-all:not(:disabled) {
-  background: #667eea;
+  background: var(--accent);
 }
 
 .btn-download-all:disabled {
-  background: #ccc;
+  background: var(--border-input);
 }
 
 .download-all-hint {
   display: block;
-  margin-top: 0.5rem;
-  color: #666;
+  margin-top: var(--space-sm);
+  color: var(--text-dimmed);
   text-align: center;
 }
 
 /* Divider */
 .section-divider {
-  margin: 1rem 0;
-  padding: 0.75rem;
-  background: #f8f9fa;
-  border-radius: 6px;
+  margin: var(--space-lg) 0;
+  padding: var(--space-md);
+  background: var(--bg-surface);
+  border-radius: var(--radius-md);
   text-align: center;
-  color: #666;
+  color: var(--text-dimmed);
 }
 
 /* Downloaded Files header */
@@ -384,22 +387,22 @@
 
 /* Upload Progress */
 .upload-progress-box {
-  margin: 1rem 0;
-  background: #e7f3ff;
-  border: 2px solid #667eea;
+  margin: var(--space-lg) 0;
+  background: rgba(102, 126, 234, 0.1);
+  border: 2px solid var(--accent);
 }
 
 .upload-progress-box .progress-info span {
   font-weight: bold;
-  color: #667eea;
+  color: var(--accent);
 }
 
 .upload-progress-box .progress-fill {
-  background: #667eea;
+  background: var(--accent);
 }
 
 .upload-progress-box .progress-percent {
-  color: #667eea;
+  color: var(--accent);
 }
 
 /* Camera group row */
@@ -407,49 +410,49 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 1rem;
+  margin-bottom: var(--space-lg);
 }
 
 .btn-upload-zip {
   font-size: 0.9rem;
-  padding: 0.5rem 1rem;
+  padding: var(--space-sm) var(--space-lg);
 }
 
 /* Uploaded ZIPs Section */
 .uploaded-zips-card {
-  background: #f0f9ff;
-  border-color: #667eea;
+  background: rgba(102, 126, 234, 0.08);
+  border-color: var(--accent);
 }
 
 .uploaded-zips-card h2 {
-  color: #667eea;
+  color: var(--accent);
 }
 
 .uploaded-zips-desc {
-  color: #666;
-  margin-bottom: 1rem;
+  color: var(--text-dimmed);
+  margin-bottom: var(--space-lg);
 }
 
 .uploaded-zips-list {
   display: flex;
   flex-direction: column;
-  gap: 1rem;
+  gap: var(--space-lg);
 }
 
 /* Zip Card */
 .zip-card {
-  background: white;
-  padding: 1rem;
-  border-radius: 8px;
-  border: 2px solid #667eea;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  background: var(--bg-surface);
+  padding: var(--space-lg);
+  border-radius: var(--radius-lg);
+  border: 2px solid var(--accent);
+  box-shadow: var(--shadow-sm);
 }
 
 .zip-card-header {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  margin-bottom: 0.75rem;
+  margin-bottom: var(--space-md);
 }
 
 .zip-card-header-inner {
@@ -458,51 +461,51 @@
 
 .zip-card-title {
   margin: 0;
-  color: #333;
+  color: var(--text-secondary);
   font-size: 1.1rem;
 }
 
 .zip-card-meta {
-  color: #666;
+  color: var(--text-dimmed);
   font-size: 0.9rem;
-  margin-top: 0.25rem;
+  margin-top: var(--space-xs);
 }
 
 /* Zip URL Display */
 .zip-url-display {
-  background: #f8f9fa;
-  padding: 0.75rem;
-  border-radius: 6px;
-  margin-bottom: 0.75rem;
-  font-family: monospace;
+  background: var(--bg-base);
+  padding: var(--space-md);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-md);
+  font-family: var(--font-mono);
   font-size: 0.85rem;
   word-break: break-all;
-  color: #495057;
+  color: var(--text-muted);
 }
 
 /* Action Buttons */
 .zip-actions {
   display: flex;
-  gap: 0.5rem;
+  gap: var(--space-sm);
 }
 
 .btn-copy-url {
-  padding: 0.5rem 1rem;
-  background: #667eea;
-  color: white;
+  padding: var(--space-sm) var(--space-lg);
+  background: var(--accent);
+  color: var(--text-primary);
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   font-size: 0.9rem;
   font-weight: 500;
 }
 
 .btn-download-zip {
-  padding: 0.5rem 1rem;
-  background: #28a745;
-  color: white;
+  padding: var(--space-sm) var(--space-lg);
+  background: var(--success);
+  color: var(--text-primary);
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   font-size: 0.9rem;
   font-weight: 500;
@@ -511,51 +514,51 @@
 }
 
 .btn-clear-history {
-  margin-top: 1rem;
-  padding: 0.5rem 1rem;
-  background: #dc3545;
-  color: white;
+  margin-top: var(--space-lg);
+  padding: var(--space-sm) var(--space-lg);
+  background: var(--danger);
+  color: var(--text-primary);
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   font-size: 0.9rem;
 }
 
 /* Message toast inline content */
 .msg-success-header {
-  margin-bottom: 0.5rem;
+  margin-bottom: var(--space-sm);
 }
 
 .msg-zip-link-section {
-  margin-top: 0.5rem;
+  margin-top: var(--space-sm);
 }
 
 .msg-zip-link {
-  color: #667eea;
+  color: var(--accent);
   text-decoration: underline;
   word-break: break-all;
 }
 
 .btn-copy-zip-url {
-  margin-top: 0.75rem;
-  padding: 0.5rem 1rem;
-  background: #667eea;
-  color: white;
+  margin-top: var(--space-md);
+  padding: var(--space-sm) var(--space-lg);
+  background: var(--accent);
+  color: var(--text-primary);
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   cursor: pointer;
 }
 
 /* Instruction sub-list */
 .instructions-sublist {
-  margin-top: 0.5rem;
-  color: #888;
+  margin-top: var(--space-sm);
+  color: var(--text-dimmed);
 }
 
 /* How-it-works ordered list */
 .how-it-works-list {
-  margin: 0.5rem 0;
-  padding-left: 1.5rem;
+  margin: var(--space-sm) 0;
+  padding-left: var(--space-xl);
 }
 
 @media (max-width: 768px) {
@@ -570,7 +573,7 @@
   .file-item {
     flex-direction: column;
     align-items: flex-start;
-    gap: 1rem;
+    gap: var(--space-lg);
   }
 
   .file-info {
@@ -581,7 +584,7 @@
 
   .file-size {
     margin-left: 0;
-    margin-top: 0.25rem;
+    margin-top: var(--space-xs);
   }
 
   .btn-sm {
@@ -595,7 +598,7 @@
 .download-card-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem;
+  gap: var(--space-sm);
 }
 
 .download-card-actions .btn {
@@ -612,75 +615,75 @@
 }
 
 .btn-danger {
-  background: #dc3545;
-  color: white;
+  background: var(--danger);
+  color: var(--text-primary);
   border: none;
   padding: 0.4rem 0.8rem;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   font-size: 0.85rem;
 }
 
 .btn-danger:hover {
-  background: #c82333;
+  background: var(--danger-dark);
 }
 
 .btn-danger:disabled {
-  background: #6c757d;
+  background: var(--text-dimmed);
   cursor: not-allowed;
 }
 
 /* ============== Erase Confirmation ============== */
 
 .erase-confirm-box {
-  margin-top: 0.75rem;
-  padding: 0.75rem;
+  margin-top: var(--space-md);
+  padding: var(--space-md);
   background: #2a1a1a;
-  border: 1px solid #dc3545;
-  border-radius: 8px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-lg);
 }
 
 .erase-confirm-text {
-  margin: 0 0 0.5rem 0;
+  margin: 0 0 var(--space-sm) 0;
   font-size: 0.85rem;
   color: #ff6b6b;
 }
 
 .erase-confirm-row {
   display: flex;
-  gap: 0.5rem;
+  gap: var(--space-sm);
   align-items: center;
 }
 
 .erase-confirm-input {
   flex: 1;
   padding: 0.4rem 0.6rem;
-  background: #1a1a1a;
-  border: 1px solid #555;
-  border-radius: 4px;
-  color: white;
+  background: var(--bg-base);
+  border: 1px solid var(--border-input);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
   font-size: 0.85rem;
 }
 
 /* ============== Browse Results ============== */
 
 .browse-results {
-  margin-top: 0.75rem;
-  border-top: 1px solid #3a3a3a;
-  padding-top: 0.75rem;
+  margin-top: var(--space-md);
+  border-top: 1px solid var(--border-default);
+  padding-top: var(--space-md);
 }
 
 .browse-summary {
   font-size: 0.85rem;
-  color: #aaa;
-  margin-bottom: 0.5rem;
+  color: var(--text-muted);
+  margin-bottom: var(--space-sm);
 }
 
 .browse-select-bar {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  margin-bottom: 0.5rem;
+  gap: var(--space-md);
+  margin-bottom: var(--space-sm);
   flex-wrap: wrap;
 }
 
@@ -689,24 +692,24 @@
   align-items: center;
   gap: 0.35rem;
   font-size: 0.85rem;
-  color: #ccc;
+  color: var(--text-tertiary);
   cursor: pointer;
 }
 
 .browse-file-list {
   max-height: 250px;
   overflow-y: auto;
-  border: 1px solid #3a3a3a;
-  border-radius: 6px;
-  background: #111;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-deep);
 }
 
 .browse-file-item {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: var(--space-sm);
   padding: 0.4rem 0.6rem;
-  border-bottom: 1px solid #2a2a2a;
+  border-bottom: 1px solid var(--bg-surface);
   cursor: pointer;
   font-size: 0.82rem;
   transition: background 0.15s;
@@ -717,7 +720,7 @@
 }
 
 .browse-file-item:hover {
-  background: #1e1e1e;
+  background: var(--bg-elevated);
 }
 
 .browse-file-item.selected {
@@ -726,14 +729,14 @@
 
 .browse-file-name {
   flex: 1;
-  color: #ddd;
+  color: var(--text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .browse-file-size {
-  color: #888;
+  color: var(--text-dimmed);
   font-size: 0.78rem;
   white-space: nowrap;
 }
@@ -752,18 +755,18 @@
   display: inline-block;
   padding: 0.2rem 0.6rem;
   background: rgba(100, 100, 100, 0.2);
-  color: #888;
+  color: var(--text-dimmed);
   border-radius: 10px;
   font-size: 0.72rem;
   font-weight: 600;
 }
 
 .download-card-disconnected-body {
-  padding: 1.5rem 1rem;
+  padding: var(--space-xl) var(--space-lg);
   text-align: center;
 }
 
 .disconnected-label {
   font-size: 0.85rem;
-  color: #888;
+  color: var(--text-dimmed);
 }

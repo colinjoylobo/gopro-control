@@ -6,18 +6,20 @@ import DownloadUpload from './components/DownloadUpload';
 import LivePreview from './components/LivePreview';
 import './App.css';
 
-const API_URL = 'http://127.0.0.1:8000';
+const API_URL = process.env.REACT_APP_API_URL || 'http://127.0.0.1:8000';
+const WS_URL = API_URL.replace(/^http/, 'ws') + '/ws';
 
 function App() {
   const [activeTab, setActiveTab] = useState('cameras');
   const [cameras, setCameras] = useState([]);
-  const [ws, setWs] = useState(null);
   const [backendStatus, setBackendStatus] = useState('connecting');
   const [downloadWsMessage, setDownloadWsMessage] = useState(null);
   const downloadWsMsgCounter = useRef(0);
   const [activeShoot, setActiveShoot] = useState(null);
   const [cohnStatus, setCohnStatus] = useState({});
   const wsSubscribersRef = useRef(new Set());
+  const wsRef = useRef(null);
+  const wsBackoffRef = useRef(1000);
 
   const subscribeWsMessages = useCallback((callback) => {
     wsSubscribersRef.current.add(callback);
@@ -33,60 +35,33 @@ function App() {
     }
   }, []);
 
-  // Connect to WebSocket for real-time updates
-  useEffect(() => {
-    connectWebSocket();
-    checkBackendStatus();
-
-    // Poll for camera updates (WebSocket handles instant updates)
-    const pollInterval = setInterval(() => {
-      fetchCameras();
-    }, 5000);
-
-    return () => {
-      if (ws) {
-        ws.close();
-      }
-      clearInterval(pollInterval);
-    };
+  const fetchCameras = useCallback(async () => {
+    try {
+      const response = await axios.get(`${API_URL}/api/cameras`);
+      setCameras(response.data.cameras);
+      return response.data.cameras;
+    } catch (error) {
+      console.error('Failed to fetch cameras:', error);
+      return [];
+    }
   }, []);
 
-  const connectWebSocket = () => {
-    const websocket = new WebSocket('ws://127.0.0.1:8000/ws');
+  const fetchActiveShoot = useCallback(async () => {
+    try {
+      const response = await axios.get(`${API_URL}/api/shoots/active`);
+      setActiveShoot(response.data.shoot);
+    } catch (error) {
+      console.error('Failed to fetch active shoot:', error);
+    }
+  }, []);
 
-    websocket.onopen = () => {
-      console.log('WebSocket connected');
-      setWs(websocket);
-    };
-
-    websocket.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      handleWebSocketMessage(data);
-    };
-
-    websocket.onerror = (error) => {
-      console.error('WebSocket error:', error);
-    };
-
-    websocket.onclose = () => {
-      console.log('WebSocket closed, reconnecting...');
-      setTimeout(connectWebSocket, 3000);
-    };
-  };
-
-  const handleWebSocketMessage = (data) => {
-    console.log('WebSocket message:', data);
-
-    // Handle different message types
+  const handleWebSocketMessage = useCallback((data) => {
     switch (data.type) {
       case 'camera_added':
       case 'camera_removed':
-        console.log('Camera list changed, refreshing...');
         fetchCameras();
         break;
       case 'camera_connection':
-        console.log(`📡 INSTANT UPDATE: Camera ${data.serial} connection status: ${data.connected}`);
-        // Instantly update the camera state without waiting for polling
         setCameras(prevCameras =>
           prevCameras.map(cam =>
             cam.serial === data.serial
@@ -96,7 +71,6 @@ function App() {
         );
         break;
       case 'recording_started':
-        console.log(`🔴 INSTANT UPDATE: Camera ${data.serial} recording started`);
         setCameras(prevCameras =>
           prevCameras.map(cam =>
             cam.serial === data.serial
@@ -106,7 +80,6 @@ function App() {
         );
         break;
       case 'recording_stopped':
-        console.log(`⏹️ INSTANT UPDATE: Camera ${data.serial} recording stopped`);
         setCameras(prevCameras =>
           prevCameras.map(cam =>
             cam.serial === data.serial
@@ -116,7 +89,6 @@ function App() {
         );
         break;
       case 'battery_update':
-        // Update battery levels on all cameras
         if (data.levels) {
           setCameras(prevCameras =>
             prevCameras.map(cam => {
@@ -144,14 +116,11 @@ function App() {
         setActiveShoot(null);
         break;
       case 'shoot_deleted':
-        if (activeShoot && activeShoot.id === data.shoot_id) setActiveShoot(null);
+        setActiveShoot(prev => (prev && prev.id === data.shoot_id ? null : prev));
         break;
       case 'take_started':
       case 'take_stopped':
         fetchActiveShoot();
-        break;
-      case 'health_update':
-        // Health data is handled by RecordingDashboard via its own polling
         break;
       case 'cohn_camera_online':
       case 'cohn_camera_offline':
@@ -163,82 +132,98 @@ function App() {
           }
         }));
         break;
-      case 'cohn_provisioning_progress':
-      case 'cohn_provisioning_complete':
-      case 'cohn_provisioning_error':
-      case 'cohn_preview_started':
-      case 'cohn_preview_stopped':
-        // Forward to subscribers (LivePreview)
-        break;
       default:
         break;
     }
 
-    // Broadcast all WS messages to subscribers
+    // Broadcast to subscribers
     wsSubscribersRef.current.forEach(cb => {
       try { cb(data); } catch (e) { console.error('WS subscriber error:', e); }
     });
-  };
+  }, [fetchCameras, fetchActiveShoot]);
 
-  const checkBackendStatus = async () => {
-    try {
-      const response = await axios.get(`${API_URL}/health`);
-      if (response.data.status === 'healthy') {
-        setBackendStatus('connected');
-        await fetchCameras();
-        fetchActiveShoot();
-        fetchCohnStatus();
+  // WebSocket connection with exponential backoff
+  useEffect(() => {
+    let destroyed = false;
+    let reconnectTimer = null;
 
-        // Check for existing BLE connections in background (don't await)
-        checkExistingConnections();
+    const connect = () => {
+      if (destroyed) return;
+      const websocket = new WebSocket(WS_URL);
+
+      websocket.onopen = () => {
+        console.log('WebSocket connected');
+        wsRef.current = websocket;
+        wsBackoffRef.current = 1000; // reset backoff on success
+      };
+
+      websocket.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          handleWebSocketMessage(data);
+        } catch (e) {
+          console.error('WS parse error:', e);
+        }
+      };
+
+      websocket.onerror = (error) => {
+        console.error('WebSocket error:', error);
+      };
+
+      websocket.onclose = () => {
+        wsRef.current = null;
+        if (destroyed) return;
+        const delay = wsBackoffRef.current;
+        wsBackoffRef.current = Math.min(delay * 2, 30000); // cap at 30s
+        console.log(`WebSocket closed, reconnecting in ${delay}ms...`);
+        reconnectTimer = setTimeout(connect, delay);
+      };
+    };
+
+    connect();
+
+    return () => {
+      destroyed = true;
+      clearTimeout(reconnectTimer);
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
       }
-    } catch (error) {
-      setBackendStatus('error');
-      setTimeout(checkBackendStatus, 3000);
-    }
-  };
+    };
+  }, [handleWebSocketMessage]);
 
-  const checkExistingConnections = async () => {
-    // Run in background without blocking
-    try {
-      console.log('Checking for existing BLE connections...');
-      axios.post(`${API_URL}/api/cameras/check-connections`, null, { timeout: 5000 })
-        .then(response => {
-          if (response.data.connected_count > 0) {
-            console.log(`Found ${response.data.connected_count} existing connections`);
-            // Fetch cameras to update UI immediately
-            fetchCameras();
-          }
-        })
-        .catch(error => {
-          console.error('Check existing connections failed:', error);
-        });
-    } catch (error) {
-      console.error('Check existing connections failed:', error);
-    }
-  };
+  // Initial backend check + polling fallback
+  useEffect(() => {
+    const checkBackendStatus = async () => {
+      try {
+        const response = await axios.get(`${API_URL}/health`);
+        if (response.data.status === 'healthy') {
+          setBackendStatus('connected');
+          await fetchCameras();
+          fetchActiveShoot();
+          fetchCohnStatus();
 
-  const fetchCameras = async () => {
-    try {
-      console.log('Fetching cameras from API...');
-      const response = await axios.get(`${API_URL}/api/cameras`);
-      console.log('Received cameras:', response.data.cameras);
-      setCameras(response.data.cameras);
-      return response.data.cameras;
-    } catch (error) {
-      console.error('Failed to fetch cameras:', error);
-      return [];
-    }
-  };
+          // Check for existing BLE connections in background
+          axios.post(`${API_URL}/api/cameras/check-connections`, null, { timeout: 5000 })
+            .then(response => {
+              if (response.data.connected_count > 0) {
+                fetchCameras();
+              }
+            })
+            .catch(() => {});
+        }
+      } catch (error) {
+        setBackendStatus('error');
+        setTimeout(checkBackendStatus, 3000);
+      }
+    };
 
-  const fetchActiveShoot = async () => {
-    try {
-      const response = await axios.get(`${API_URL}/api/shoots/active`);
-      setActiveShoot(response.data.shoot);
-    } catch (error) {
-      console.error('Failed to fetch active shoot:', error);
-    }
-  };
+    checkBackendStatus();
+
+    // Polling fallback (WebSocket handles instant updates, this is the safety net)
+    const pollInterval = setInterval(fetchCameras, 5000);
+    return () => clearInterval(pollInterval);
+  }, [fetchCameras, fetchActiveShoot, fetchCohnStatus]);
 
   return (
     <div className="app">
