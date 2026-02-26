@@ -566,12 +566,24 @@ function LivePreview({ cameras, apiUrl, cohnStatus, onCohnUpdate, subscribeWsMes
 
   const layoutConfig = LAYOUTS.find(l => l.id === activeLayout) || LAYOUTS[0];
 
-  // Sort cameras: streaming first, then connected, then disconnected
+  // Sort cameras: streaming > provisioned+online > provisioned > connected > disconnected
   const sortedCameras = [...cameras].sort((a, b) => {
     const aStreaming = mode === 'cohn' ? (cohnCameras[a.serial]?.streaming || false) : (previewing && a.serial === selectedCamera);
     const bStreaming = mode === 'cohn' ? (cohnCameras[b.serial]?.streaming || false) : (previewing && b.serial === selectedCamera);
     if (aStreaming && !bStreaming) return -1;
     if (!aStreaming && bStreaming) return 1;
+    if (mode === 'cohn') {
+      const aCohn = cohnStatus?.[a.serial];
+      const bCohn = cohnStatus?.[b.serial];
+      const aOnline = aCohn?.provisioned && aCohn?.online;
+      const bOnline = bCohn?.provisioned && bCohn?.online;
+      if (aOnline && !bOnline) return -1;
+      if (!aOnline && bOnline) return 1;
+      const aProv = aCohn?.provisioned || false;
+      const bProv = bCohn?.provisioned || false;
+      if (aProv && !bProv) return -1;
+      if (!aProv && bProv) return 1;
+    }
     if (a.connected && !b.connected) return -1;
     if (!a.connected && b.connected) return 1;
     return 0;
@@ -775,7 +787,7 @@ function LivePreview({ cameras, apiUrl, cohnStatus, onCohnUpdate, subscribeWsMes
             </div>
 
             <div className="provision-list">
-              {cameras.map(camera => {
+              {sortedCameras.map(camera => {
                 const cohn = cohnStatus?.[camera.serial];
                 const isProvisioning = provisioning === camera.serial;
 
