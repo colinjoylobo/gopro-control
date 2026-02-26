@@ -27,6 +27,11 @@ function DownloadUpload({ cameras, apiUrl, downloadWsMessage, activeShoot }) {
   const [eraseConfirm, setEraseConfirm] = useState(null); // serial awaiting confirmation
   const [eraseInput, setEraseInput] = useState('');
   const [erasing, setErasing] = useState(null); // serial currently being erased
+  // Bulk erase state
+  const [bulkEraseConfirm, setBulkEraseConfirm] = useState(false);
+  const [bulkEraseInput, setBulkEraseInput] = useState('');
+  const [bulkErasing, setBulkErasing] = useState(false);
+  const [bulkEraseProgress, setBulkEraseProgress] = useState(null); // { current, total, serial }
 
   const connectedCameras = cameras.filter(cam => cam.connected);
   const sortedCameras = [...cameras].sort((a, b) => {
@@ -605,6 +610,34 @@ function DownloadUpload({ cameras, apiUrl, downloadWsMessage, activeShoot }) {
     }
   };
 
+  const handleBulkErase = async () => {
+    setBulkErasing(true);
+    setBulkEraseConfirm(false);
+    setBulkEraseInput('');
+    const connected = connectedCameras;
+    let successCount = 0;
+    for (let i = 0; i < connected.length; i++) {
+      const cam = connected[i];
+      setBulkEraseProgress({ current: i + 1, total: connected.length, serial: cam.serial });
+      setMessage({ type: 'info', text: `Erasing SD card ${i + 1}/${connected.length}: ${cam.name || `GoPro ${cam.serial}`}...` });
+      try {
+        await axios.post(`${apiUrl}/api/cameras/${cam.serial}/erase-sd`, null, { timeout: 120000 });
+        successCount++;
+        setBrowseFiles(prev => { const n = {...prev}; delete n[cam.serial]; return n; });
+      } catch (error) {
+        console.error(`Failed to erase ${cam.serial}:`, error);
+      }
+    }
+    setBulkErasing(false);
+    setBulkEraseProgress(null);
+    if (successCount === connected.length) {
+      setMessage({ type: 'success', text: `Erased SD cards on all ${successCount} cameras` });
+    } else {
+      setMessage({ type: 'warning', text: `Erased ${successCount}/${connected.length} cameras. Some failed.` });
+    }
+    setTimeout(() => setMessage(null), 5000);
+  };
+
   const handleDisconnectCamera = async (serial) => {
     try {
       await axios.post(`${apiUrl}/api/cameras/disconnect/${serial}`);
@@ -1165,6 +1198,67 @@ function DownloadUpload({ cameras, apiUrl, downloadWsMessage, activeShoot }) {
               <small className="download-all-hint">
                 This will download {maxFiles ? `last ${maxFiles} files` : 'all files'} from each camera sequentially
               </small>
+            </div>
+
+            {/* Bulk Erase All SD Cards */}
+            <div className="download-all-wrapper">
+              {!bulkEraseConfirm && !bulkErasing && (
+                <button
+                  className="btn btn-danger btn-download-all"
+                  onClick={() => { setBulkEraseConfirm(true); setBulkEraseInput(''); }}
+                  disabled={downloading || bulkErasing}
+                >
+                  Erase All SD Cards ({connectedCameras.length} cameras)
+                </button>
+              )}
+
+              {bulkEraseConfirm && (
+                <div className="erase-confirm-box">
+                  <p className="erase-confirm-text">
+                    Type <strong>ERASE ALL</strong> to confirm erasing SD cards on {connectedCameras.length} connected camera(s). This cannot be undone.
+                  </p>
+                  <div className="erase-confirm-row">
+                    <input
+                      type="text"
+                      value={bulkEraseInput}
+                      onChange={(e) => setBulkEraseInput(e.target.value)}
+                      placeholder="Type ERASE ALL"
+                      className="erase-confirm-input"
+                      autoFocus
+                    />
+                    <button
+                      className="btn btn-danger btn-sm"
+                      onClick={handleBulkErase}
+                      disabled={bulkEraseInput !== 'ERASE ALL'}
+                    >
+                      Confirm Erase All
+                    </button>
+                    <button
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => { setBulkEraseConfirm(false); setBulkEraseInput(''); }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {bulkEraseProgress && (
+                <div className="card bulk-progress-card" style={{ borderColor: 'var(--danger)' }}>
+                  <h3 className="bulk-progress-title" style={{ color: 'var(--danger)' }}>
+                    Erasing SD Cards
+                  </h3>
+                  <div className="bulk-progress-camera">
+                    Camera {bulkEraseProgress.current} of {bulkEraseProgress.total}: {bulkEraseProgress.serial}
+                  </div>
+                  <div className="progress-bar bulk-progress-bar">
+                    <div
+                      className="progress-fill"
+                      style={{ width: `${(bulkEraseProgress.current / bulkEraseProgress.total) * 100}%`, background: 'var(--danger)' }}
+                    ></div>
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="section-divider">

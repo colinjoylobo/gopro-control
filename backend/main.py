@@ -25,11 +25,29 @@ from shoot_manager import ShootManager
 from preset_manager import PresetManager
 from cohn_manager import COHNManager
 
-# Setup logging
+# Setup logging — also write to file so logs are accessible when launched from Electron
+_log_file_path = Path(__file__).parent / "gopro_backend.log"
+_direct_log_file = open(_log_file_path, 'w')
+
+class _TeeHandler(logging.Handler):
+    """Writes log records to our file regardless of uvicorn's logger config."""
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            _direct_log_file.write(msg + '\n')
+            _direct_log_file.flush()
+        except Exception:
+            pass
+
+_tee = _TeeHandler()
+_tee.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
 )
+# Attach to root so ALL loggers (main, camera_manager, open_gopro, uvicorn) get captured
+logging.getLogger().addHandler(_tee)
 logger = logging.getLogger(__name__)
 
 # Initialize FastAPI
@@ -161,6 +179,7 @@ async def connection_monitor():
     battery_poll_counter = 0
     health_poll_counter = 0
     cohn_poll_counter = 0
+    ble_probe_counter = 0
     previous_cohn_online = {}
 
     logger.info("🔄 Connection monitor started - checking every 0.5 seconds")
@@ -191,33 +210,35 @@ async def connection_monitor():
                     # Update previous state
                     previous_states[serial] = current_connected
 
-            # Poll battery every 60 seconds (120 iterations * 0.5s = 60s)
-            battery_poll_counter += 1
-            if battery_poll_counter >= 120:
-                battery_poll_counter = 0
-                try:
-                    battery_levels = await camera_manager.get_all_battery_levels()
-                    if any(v is not None for v in battery_levels.values()):
-                        await broadcast_message({
-                            "type": "battery_update",
-                            "levels": battery_levels
-                        })
-                except Exception as e:
-                    logger.debug(f"Battery poll error: {e}")
-
-            # Broadcast health data every 15 seconds (30 iterations * 0.5s = 15s)
-            health_poll_counter += 1
-            if health_poll_counter >= 30:
-                health_poll_counter = 0
-                if websocket_connections:
+            # Skip all BLE polling while shutter commands are in flight
+            if not camera_manager.ble_busy:
+                # Poll battery every 60 seconds (120 iterations * 0.5s = 60s)
+                battery_poll_counter += 1
+                if battery_poll_counter >= 120:
+                    battery_poll_counter = 0
                     try:
-                        health_data = await camera_manager.get_all_health()
-                        await broadcast_message({
-                            "type": "health_update",
-                            "cameras": health_data
-                        })
+                        battery_levels = await camera_manager.get_all_battery_levels()
+                        if any(v is not None for v in battery_levels.values()):
+                            await broadcast_message({
+                                "type": "battery_update",
+                                "levels": battery_levels
+                            })
                     except Exception as e:
-                        logger.debug(f"Health poll error: {e}")
+                        logger.debug(f"Battery poll error: {e}")
+
+                # Broadcast health data every 15 seconds (30 iterations * 0.5s = 15s)
+                health_poll_counter += 1
+                if health_poll_counter >= 30:
+                    health_poll_counter = 0
+                    if websocket_connections:
+                        try:
+                            health_data = await camera_manager.get_all_health()
+                            await broadcast_message({
+                                "type": "health_update",
+                                "cameras": health_data
+                            })
+                        except Exception as e:
+                            logger.debug(f"Health poll error: {e}")
 
             # Poll COHN cameras every 30 seconds (60 * 0.5s) - also serves as keep-alive
             cohn_poll_counter += 1
@@ -251,6 +272,12 @@ async def connection_monitor():
                                         pass
                     except Exception as e:
                         logger.debug(f"COHN poll error: {e}")
+
+            # Active BLE probes disabled — they send keep_alive BLE commands that
+            # timeout due to response handling issues with multiple cameras sharing
+            # the BLE singleton, causing false disconnections.
+            # Disconnection detection relies on the passive bleak_client.is_connected
+            # check in update_connection_status() above, which checks OS-level state.
 
             # Wait 0.5 seconds before next check (checks 2x per second)
             await asyncio.sleep(0.5)

@@ -712,11 +712,14 @@
   display: flex;
   gap: var(--space-sm);
   align-items: center;
+  flex-wrap: wrap;
 }
 
-.erase-confirm-input {
+.erase-confirm-box .erase-confirm-input {
   flex: 1;
-  padding: 0.4rem 0.6rem;
+  min-width: 120px;
+  width: auto;
+  padding: 0.5rem 0.75rem;
   background: var(--bg-base);
   border: 1px solid var(--border-input);
   border-radius: var(--radius-sm);

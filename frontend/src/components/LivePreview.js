@@ -619,7 +619,7 @@ function LivePreview({ cameras, apiUrl, cohnStatus, onCohnUpdate, subscribeWsMes
           </div>
         </div>
 
-        {camera.connected || (mode === 'cohn' && cohn?.provisioned) ? (
+        {camera.connected || (mode === 'cohn' && cohn?.provisioned && cohn?.online) ? (
           <div className="info-card-body">
             {/* Battery */}
             <div className="info-row">
@@ -812,8 +812,20 @@ function LivePreview({ cameras, apiUrl, cohnStatus, onCohnUpdate, subscribeWsMes
                           <span className="progress-text">{provisionStep}</span>
                         </div>
                       ) : cohn?.provisioned ? (
-                        <span className={`dot-indicator ${cohn.online ? 'dot-conn-on' : 'dot-conn-off'}`}
-                          title={cohn.online ? 'Online' : 'Offline'}></span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          <span className={`dot-indicator ${cohn.online ? 'dot-conn-on' : 'dot-conn-off'}`}
+                            title={cohn.online ? 'Online' : 'Offline'}></span>
+                          {!cohn.online && (
+                            <button
+                              className="btn btn-secondary btn-sm"
+                              onClick={() => provisionCamera(camera.serial)}
+                              disabled={!wifiSSID || !wifiPassword || provisioning !== null}
+                              title="Re-provision to current WiFi network"
+                            >
+                              Re-provision
+                            </button>
+                          )}
+                        </div>
                       ) : (
                         <button
                           className="btn btn-primary btn-sm"

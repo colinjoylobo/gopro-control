@@ -31,6 +31,21 @@ try:
 except Exception as e:
     logger.warning(f"Failed to patch BleakWrapperController: {e}")
 
+# CRITICAL FIX: _find_device() hardcodes retries=30 (= 150 seconds of scanning for an offline camera).
+# open() calls _find_device() without forwarding its own retries parameter.
+# Patch to use retries=3 (= 15 seconds max) so offline cameras fail fast and don't block the BLE singleton.
+try:
+    from open_gopro.ble.client import BleClient
+    _original_find_device = BleClient._find_device
+
+    def _patched_find_device(self, timeout=5, retries=3):
+        return _original_find_device(self, timeout=timeout, retries=retries)
+
+    BleClient._find_device = _patched_find_device
+    logger.info("Patched BleClient._find_device to use retries=3 (was 30)")
+except Exception as e:
+    logger.warning(f"Failed to patch BleClient._find_device: {e}")
+
 
 class CameraInstance:
     def __init__(self, serial: str, wifi_ssid: str, wifi_password: str, name: str = ""):
@@ -62,10 +77,16 @@ class CameraInstance:
 
                 await asyncio.wait_for(
                     loop.run_in_executor(None, self.gopro.open),
-                    timeout=60
+                    timeout=25
                 )
 
-                logger.info(f"[{self.serial}] Connection opened, disabling WiFi...")
+                logger.info(f"[{self.serial}] Connection opened, disabling internal state machine...")
+
+                # Disable open_gopro's internal _maintain_ble state machine.
+                # Its _ready lock blocks all BLE commands when the _maintain_state
+                # thread doesn't process status notifications in time (common with
+                # multiple cameras sharing the BLE singleton). We manage state ourselves.
+                self.gopro._maintain_ble = False
 
                 try:
                     self.gopro.ble_command.enable_wifi_ap(False)
@@ -105,14 +126,16 @@ class CameraInstance:
 
     async def disconnect(self):
         """Disconnect BLE"""
-        if self.gopro and self.gopro.is_ble_connected:
+        if self.gopro:
             try:
                 loop = asyncio.get_event_loop()
                 await loop.run_in_executor(None, self.gopro.close)
-                self.connected = False
                 logger.info(f"[{self.serial}] Disconnected")
             except Exception as e:
                 logger.error(f"[{self.serial}] Disconnect error: {e}")
+            # Always clean up state, even if close() failed (stale handle)
+            self.connected = False
+            self.recording = False
 
     def _ble_cmd_in_thread(self, func, args=(), timeout=15):
         """Run a BLE command in a dedicated thread (not executor pool).
@@ -137,44 +160,32 @@ class CameraInstance:
             return result[0], error[0]
         return result[0], None
 
-    async def _fire_shutter(self, shutter: "Params.Shutter") -> bool:
-        """Fire shutter command once (no retry). Used for synchronized multi-camera start/stop."""
+    def _fire_shutter_raw(self, shutter: "Params.Shutter") -> bool:
+        """Fire shutter via raw BLE write — no response wait.
+
+        Writes directly to the BLE command characteristic, bypassing open_gopro's
+        response handling which blocks for 5+ seconds per camera.  This is
+        fire-and-forget: the camera starts/stops recording on receipt of the
+        BLE write regardless of whether we read the acknowledgement.
+        """
         try:
-            self.update_connection_status()
+            from open_gopro.constants import GoProUUIDs
             if not self.connected or not self.gopro or not self.gopro.is_ble_connected:
                 logger.error(f"[{self.serial}] Cannot fire shutter: Not connected")
                 return False
 
             is_start = (shutter == Params.Shutter.ON)
             action = "start" if is_start else "stop"
-            logger.info(f"[{self.serial}] Firing shutter {action}...")
 
-            if is_start:
-                self.gopro._encoding_started.clear()
-                timer = threading.Timer(3.0, self.gopro._encoding_started.set)
-                timer.daemon = True
-                timer.start()
-            else:
-                self.gopro._encoding_started.set()
-                await asyncio.sleep(0.2)
+            # Raw shutter command bytes:
+            # [length=3, cmd=SET_SHUTTER(0x01), param_len=1, value]
+            value = 0x01 if is_start else 0x00
+            data = bytearray([0x03, 0x01, 0x01, value])
 
-            loop = asyncio.get_event_loop()
-            _, err = await loop.run_in_executor(
-                None,
-                self._ble_cmd_in_thread,
-                self.gopro.ble_command.set_shutter,
-                (shutter,),
-                10
-            )
-
-            if is_start:
-                timer.cancel()
-
-            if err and err != "timeout":
-                raise err
+            self.gopro._ble.write(GoProUUIDs.CQ_COMMAND, data)
 
             self.recording = is_start
-            logger.info(f"[{self.serial}] Shutter {action} sent successfully")
+            logger.info(f"[{self.serial}] Shutter {action} sent (raw BLE write)")
             return True
 
         except Exception as e:
@@ -568,8 +579,28 @@ class CameraInstance:
         return results
 
     def update_connection_status(self) -> bool:
-        """Check and update actual connection status from gopro object"""
+        """Check and update actual connection status from gopro object.
+
+        Checks both the open_gopro handle and the underlying Bleak client's
+        actual OS-level connection state to detect stale connections (e.g.
+        camera powered off).
+        """
         if self.gopro and self.gopro.is_ble_connected:
+            # is_ble_connected only checks _handle is not None — it can be stale.
+            # Also check the underlying Bleak client's real connection state.
+            try:
+                bleak_client = self.gopro._ble._handle
+                if bleak_client and not bleak_client.is_connected:
+                    logger.info(f"[{self.serial}] Stale BLE handle detected (Bleak reports disconnected), cleaning up")
+                    try:
+                        self.gopro._ble._handle = None
+                    except Exception:
+                        pass
+                    self.connected = False
+                    self.recording = False
+                    return False
+            except (AttributeError, Exception):
+                pass  # Can't check Bleak state, fall through to normal check
             if not self.connected:
                 logger.info(f"[{self.serial}] Detected existing BLE connection")
             self.connected = True
@@ -578,6 +609,28 @@ class CameraInstance:
             if self.connected:
                 logger.info(f"[{self.serial}] Connection lost")
             self.connected = False
+            return False
+
+    def probe_ble_alive(self) -> bool:
+        """Actively probe BLE connection by attempting a lightweight read.
+
+        Returns True if the camera responds, False if it appears dead.
+        This is more expensive than update_connection_status() — call
+        periodically (e.g. every 15s), not on every poll.
+        """
+        if not self.gopro or not self.connected:
+            return False
+        try:
+            # Try sending a keep-alive — this does an actual BLE write
+            result, err = self._ble_cmd_in_thread(
+                self.gopro.keep_alive, timeout=5
+            )
+            if err:
+                logger.info(f"[{self.serial}] BLE probe failed: {err}")
+                return False
+            return True
+        except Exception as e:
+            logger.info(f"[{self.serial}] BLE probe exception: {e}")
             return False
 
     def to_dict(self) -> dict:
@@ -596,6 +649,7 @@ class CameraInstance:
 class CameraManager:
     def __init__(self):
         self.cameras: Dict[str, CameraInstance] = {}
+        self.ble_busy = False  # Set True while shutter commands are in flight to pause polling
 
     def add_camera(self, serial: str, wifi_ssid: str, wifi_password: str, name: str = "") -> bool:
         if serial in self.cameras:
@@ -642,7 +696,11 @@ class CameraManager:
         return results
 
     async def _check_single_connection(self, serial: str, camera: CameraInstance) -> bool:
-        """Check a single camera for existing connection"""
+        """Check a single camera for existing connection.
+
+        Uses minimal retries (1 scan, 8s timeout) so it finishes quickly
+        and doesn't block the BLE singleton for minutes on cameras that are off.
+        """
         try:
             last4 = serial[-4:] if len(serial) > 4 else serial
             ble_target = f"GoPro {last4}"
@@ -650,27 +708,22 @@ class CameraManager:
             camera.gopro = GoPro(target=ble_target, enable_wifi=False)
 
             loop = asyncio.get_event_loop()
+            # Use retries=1, timeout=5 so scan finishes fast for missing cameras
             await asyncio.wait_for(
-                loop.run_in_executor(None, camera.gopro.open),
-                timeout=1
+                loop.run_in_executor(
+                    None,
+                    lambda: camera.gopro.open(timeout=5, retries=1)
+                ),
+                timeout=8
             )
 
+            # Disable _maintain_ble to prevent _ready lock blocking BLE commands
+            camera.gopro._maintain_ble = False
             camera.connected = True
             logger.info(f"[{serial}] Found existing BLE connection!")
             return True
 
-        except asyncio.TimeoutError:
-            logger.debug(f"[{serial}] No existing connection (1s timeout)")
-            if camera.gopro:
-                try:
-                    loop = asyncio.get_event_loop()
-                    await loop.run_in_executor(None, camera.gopro.close)
-                except Exception:
-                    pass
-                camera.gopro = None
-            camera.connected = False
-            return False
-        except Exception as e:
+        except (asyncio.TimeoutError, Exception) as e:
             logger.debug(f"[{serial}] No existing connection: {e}")
             if camera.gopro:
                 try:
@@ -723,80 +776,56 @@ class CameraManager:
         await asyncio.gather(*tasks, return_exceptions=True)
 
     async def start_recording_all(self) -> Dict[str, bool]:
-        """Start recording on all connected cameras — concurrent for synchronized start.
+        """Start recording on all connected cameras — rapid sequential to avoid BLE contention.
 
-        Fires BLE shutter commands to all cameras at the same time so they
-        begin recording within ~200ms of each other instead of sequentially.
+        Uses raw BLE writes (fire-and-forget) for near-simultaneous start.
+        All cameras receive the shutter command within milliseconds of each other.
         """
         connected = {s: c for s, c in self.cameras.items() if c.connected}
         if not connected:
             return {}
 
         serials = list(connected.keys())
-        logger.info(f"Firing START shutter concurrently to {len(serials)} cameras...")
+        logger.info(f"Firing START shutter to {len(serials)} cameras (raw BLE write)...")
         t0 = time.monotonic()
 
-        tasks = [camera._fire_shutter(Params.Shutter.ON) for camera in connected.values()]
-        task_results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        elapsed_ms = (time.monotonic() - t0) * 1000
-        logger.info(f"All shutter commands completed in {elapsed_ms:.0f}ms")
-
         results = {}
-        for serial, result in zip(serials, task_results):
-            if isinstance(result, bool):
-                results[serial] = result
-            else:
-                logger.error(f"[{serial}] Start recording exception: {result}")
+        for serial in serials:
+            camera = connected[serial]
+            try:
+                ok = camera._fire_shutter_raw(Params.Shutter.ON)
+                results[serial] = ok
+            except Exception as e:
+                logger.error(f"[{serial}] Start recording exception: {e}")
                 results[serial] = False
 
-        # Retry any failures sequentially (fallback)
-        failed = [s for s, ok in results.items() if not ok]
-        if failed:
-            logger.info(f"Retrying {len(failed)} failed camera(s) sequentially...")
-            for serial in failed:
-                try:
-                    results[serial] = await connected[serial].start_recording()
-                except Exception as e:
-                    logger.error(f"[{serial}] Retry start recording failed: {e}")
-                    results[serial] = False
+        elapsed_ms = (time.monotonic() - t0) * 1000
+        logger.info(f"All shutter commands fired in {elapsed_ms:.0f}ms")
 
         return results
 
     async def stop_recording_all(self) -> Dict[str, bool]:
-        """Stop recording on all connected cameras — concurrent for synchronized stop."""
+        """Stop recording on all connected cameras — raw BLE write for simultaneous stop."""
         connected = {s: c for s, c in self.cameras.items() if c.connected}
         if not connected:
             return {}
 
         serials = list(connected.keys())
-        logger.info(f"Firing STOP shutter concurrently to {len(serials)} cameras...")
+        logger.info(f"Firing STOP shutter to {len(serials)} cameras (raw BLE write)...")
         t0 = time.monotonic()
 
-        tasks = [camera._fire_shutter(Params.Shutter.OFF) for camera in connected.values()]
-        task_results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        elapsed_ms = (time.monotonic() - t0) * 1000
-        logger.info(f"All stop commands completed in {elapsed_ms:.0f}ms")
-
         results = {}
-        for serial, result in zip(serials, task_results):
-            if isinstance(result, bool):
-                results[serial] = result
-            else:
-                logger.error(f"[{serial}] Stop recording exception: {result}")
+        for serial in serials:
+            camera = connected[serial]
+            try:
+                ok = camera._fire_shutter_raw(Params.Shutter.OFF)
+                results[serial] = ok
+            except Exception as e:
+                logger.error(f"[{serial}] Stop recording exception: {e}")
                 results[serial] = False
 
-        # Retry any failures sequentially
-        failed = [s for s, ok in results.items() if not ok]
-        if failed:
-            logger.info(f"Retrying {len(failed)} failed camera(s) sequentially...")
-            for serial in failed:
-                try:
-                    results[serial] = await connected[serial].stop_recording()
-                except Exception as e:
-                    logger.error(f"[{serial}] Retry stop recording failed: {e}")
-                    results[serial] = False
+        elapsed_ms = (time.monotonic() - t0) * 1000
+        logger.info(f"All stop commands fired in {elapsed_ms:.0f}ms")
 
         return results
 

@@ -141,7 +141,7 @@ function RecordingDashboard({ cameras, onCamerasUpdate, apiUrl, activeShoot, onS
     setMessage({ type: 'info', text: `Starting recording on ${connectedCameras.length} cameras...` });
 
     try {
-      const response = await axios.post(`${apiUrl}/api/recording/start`, null, { timeout: 30000 });
+      const response = await axios.post(`${apiUrl}/api/recording/start`, null, { timeout: 120000 });
       const results = response.data.results;
       const successCount = Object.values(results).filter(r => r).length;
       const totalCount = Object.keys(results).length;

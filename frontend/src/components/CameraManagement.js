@@ -10,7 +10,7 @@ function CameraManagement({ cameras, onCamerasUpdate, apiUrl }) {
   const [connectingSerial, setConnectingSerial] = useState(null);
   const [message, setMessage] = useState(null);
   const [discoveredCameras, setDiscoveredCameras] = useState([]);
-  const [eraseModal, setEraseModal] = useState(null); // { serial, cameraName, loading, summary }
+  const [eraseModal, setEraseModal] = useState(null); // { serial, cameraName }
   const [eraseConfirmText, setEraseConfirmText] = useState('');
   const [erasing, setErasing] = useState(false);
 
@@ -216,21 +216,9 @@ function CameraManagement({ cameras, onCamerasUpdate, apiUrl }) {
     }
   };
 
-  const handleEraseSD = async (serial, cameraName) => {
-    setEraseModal({ serial, cameraName, loading: true, summary: null });
+  const handleEraseSD = (serial, cameraName) => {
+    setEraseModal({ serial, cameraName });
     setEraseConfirmText('');
-
-    try {
-      const response = await axios.get(`${apiUrl}/api/cameras/${serial}/media-summary`, {
-        timeout: 60000
-      });
-      setEraseModal({ serial, cameraName, loading: false, summary: response.data });
-    } catch (error) {
-      const errorMsg = error.response?.data?.detail || 'Failed to get media summary';
-      setMessage({ type: 'error', text: errorMsg });
-      setEraseModal(null);
-      setTimeout(() => setMessage(null), 5000);
-    }
   };
 
   const handleConfirmErase = async () => {
@@ -507,61 +495,41 @@ function CameraManagement({ cameras, onCamerasUpdate, apiUrl }) {
               Camera: <strong style={{ color: 'white' }}>{eraseModal.cameraName}</strong> ({eraseModal.serial})
             </p>
 
-            {eraseModal.loading ? (
-              <div style={{ textAlign: 'center', padding: '2rem' }}>
-                <div className="erase-spinner"></div>
-                <p style={{ color: '#aaa', marginTop: '1rem' }}>Connecting to camera and fetching media info...</p>
-              </div>
-            ) : eraseModal.summary ? (
-              <>
-                <div className="erase-modal-stats">
-                  <div className="erase-stat">
-                    <span className="erase-stat-value">{eraseModal.summary.file_count}</span>
-                    <span className="erase-stat-label">Files</span>
-                  </div>
-                  <div className="erase-stat">
-                    <span className="erase-stat-value">{eraseModal.summary.total_size_human}</span>
-                    <span className="erase-stat-label">Total Size</span>
-                  </div>
-                </div>
+            <div className="erase-modal-warning">
+              This will permanently delete ALL files on the SD card. This cannot be undone.
+            </div>
 
-                <div className="erase-modal-warning">
-                  This will permanently delete ALL files on the SD card. This cannot be undone.
-                </div>
+            <div style={{ marginBottom: '1.5rem' }}>
+              <label style={{ display: 'block', marginBottom: '0.5rem', color: '#aaa', fontSize: '0.875rem' }}>
+                Type <strong style={{ color: 'white' }}>{eraseModal.serial}</strong> to confirm:
+              </label>
+              <input
+                type="text"
+                className="erase-confirm-input"
+                value={eraseConfirmText}
+                onChange={(e) => setEraseConfirmText(e.target.value)}
+                placeholder={`Type ${eraseModal.serial} here`}
+                disabled={erasing}
+                autoFocus
+              />
+            </div>
 
-                <div style={{ marginBottom: '1.5rem' }}>
-                  <label style={{ display: 'block', marginBottom: '0.5rem', color: '#aaa', fontSize: '0.875rem' }}>
-                    Type <strong style={{ color: 'white' }}>{eraseModal.serial}</strong> to confirm:
-                  </label>
-                  <input
-                    type="text"
-                    className="erase-confirm-input"
-                    value={eraseConfirmText}
-                    onChange={(e) => setEraseConfirmText(e.target.value)}
-                    placeholder={`Type ${eraseModal.serial} here`}
-                    disabled={erasing}
-                    autoFocus
-                  />
-                </div>
-
-                <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
-                  <button
-                    className="btn btn-secondary"
-                    onClick={() => { setEraseModal(null); setEraseConfirmText(''); }}
-                    disabled={erasing}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    className="btn btn-erase-confirm"
-                    onClick={handleConfirmErase}
-                    disabled={eraseConfirmText !== eraseModal.serial || erasing}
-                  >
-                    {erasing ? 'Erasing...' : 'Erase All Files'}
-                  </button>
-                </div>
-              </>
-            ) : null}
+            <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
+              <button
+                className="btn btn-secondary"
+                onClick={() => { setEraseModal(null); setEraseConfirmText(''); }}
+                disabled={erasing}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn btn-erase-confirm"
+                onClick={handleConfirmErase}
+                disabled={eraseConfirmText !== eraseModal.serial || erasing}
+              >
+                {erasing ? 'Erasing...' : 'Erase All Files'}
+              </button>
+            </div>
           </div>
         </div>
       )}
