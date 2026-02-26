@@ -271,6 +271,65 @@
   margin-top: var(--space-lg);
 }
 
+/* Take Selector */
+.take-selector-group {
+  margin-bottom: var(--space-lg);
+  padding: var(--space-lg);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+}
+
+.take-selector-label {
+  display: block;
+  margin-bottom: var(--space-sm);
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.take-selector-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-lg);
+}
+
+.take-selector-select {
+  flex: 1;
+  padding: var(--space-sm) var(--space-md);
+  background: var(--bg-surface);
+  border: 2px solid var(--border-input);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: border-color 0.2s;
+}
+
+.take-selector-select:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.take-selector-shoot-name {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.take-selector-hint {
+  display: block;
+  margin-top: var(--space-sm);
+  font-size: 0.8rem;
+  color: var(--text-dimmed);
+  font-family: var(--font-mono);
+}
+
+.take-selector-hint strong {
+  color: var(--warning);
+  font-family: var(--font-sans);
+}
+
 /* Download Limit Input */
 .download-limit-group {
   margin-bottom: var(--space-lg);

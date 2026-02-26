@@ -18,6 +18,7 @@ function DownloadUpload({ cameras, apiUrl, downloadWsMessage, activeShoot }) {
   const [uploadedZips, setUploadedZips] = useState([]);
   const [maxFiles, setMaxFiles] = useState('');
   const [bulkDownloadProgress, setBulkDownloadProgress] = useState(null);
+  const [selectedTakeIdx, setSelectedTakeIdx] = useState('latest');
   // Browse/scan state
   const [browseFiles, setBrowseFiles] = useState({}); // { serial: { videos: [], others: [], total_files, total_size_human } }
   const [browsing, setBrowsing] = useState(null); // serial currently being browsed
@@ -233,12 +234,31 @@ function DownloadUpload({ cameras, apiUrl, downloadWsMessage, activeShoot }) {
     }
   };
 
+  const getSelectedTake = () => {
+    if (!activeShoot || !activeShoot.takes || activeShoot.takes.length === 0) return null;
+    if (selectedTakeIdx === 'latest') {
+      const completedTakes = activeShoot.takes.filter(t => t.stopped_at);
+      return completedTakes.length > 0 ? completedTakes[completedTakes.length - 1] : null;
+    }
+    if (selectedTakeIdx === 'none') return null;
+    return activeShoot.takes[parseInt(selectedTakeIdx)] || null;
+  };
+
   const handleDownloadFromCamera = async (serial, shootName = null, takeNumber = null) => {
     const camera = cameras.find(c => c.serial === serial);
     if (!camera) {
       setMessage({ type: 'error', text: 'Camera not found' });
       setTimeout(() => setMessage(null), 3000);
       return;
+    }
+
+    // Use selected take if no explicit shoot/take passed
+    if (!shootName && activeShoot) {
+      const take = getSelectedTake();
+      if (take && take.stopped_at) {
+        shootName = activeShoot.name;
+        takeNumber = take.take_number;
+      }
     }
 
     setDownloading(true);
@@ -355,12 +375,12 @@ function DownloadUpload({ cameras, apiUrl, downloadWsMessage, activeShoot }) {
 
         const dlParams = {};
         if (maxFiles) dlParams.max_files = parseInt(maxFiles);
-        // Pass shoot/take info when an active shoot has completed takes
-        if (activeShoot && activeShoot.takes && activeShoot.takes.length > 0) {
-          const latestTake = activeShoot.takes[activeShoot.takes.length - 1];
-          if (latestTake.stopped_at) {
+        // Pass shoot/take info from selected take
+        if (activeShoot) {
+          const take = getSelectedTake();
+          if (take && take.stopped_at) {
             dlParams.shoot_name = activeShoot.name;
-            dlParams.take_number = latestTake.take_number;
+            dlParams.take_number = take.take_number;
           }
         }
 
@@ -1037,6 +1057,48 @@ function DownloadUpload({ cameras, apiUrl, downloadWsMessage, activeShoot }) {
                 Leave empty to download all files, or enter a number (e.g., 5) to download only the last N files (newest first)
               </small>
             </div>
+
+            {/* Take Selector — shown when active shoot has takes */}
+            {activeShoot && activeShoot.takes && activeShoot.takes.length > 0 && (
+              <div className="form-group take-selector-group">
+                <label className="take-selector-label">
+                  Download into Take Folder
+                </label>
+                <div className="take-selector-row">
+                  <select
+                    className="take-selector-select"
+                    value={selectedTakeIdx}
+                    onChange={(e) => setSelectedTakeIdx(e.target.value)}
+                  >
+                    <option value="latest">Latest Completed Take</option>
+                    <option value="none">No Take (date-based folder)</option>
+                    {activeShoot.takes.map((take, idx) => (
+                      <option key={idx} value={idx}>
+                        Take {take.take_number}
+                        {take.stopped_at ? '' : ' (in progress)'}
+                        {' — '}
+                        {take.cameras?.length || 0} camera{(take.cameras?.length || 0) !== 1 ? 's' : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="take-selector-shoot-name">
+                    Shoot: {activeShoot.name}
+                  </span>
+                </div>
+                {selectedTakeIdx !== 'none' && (() => {
+                  const take = selectedTakeIdx === 'latest' ? getSelectedTake() : activeShoot.takes[parseInt(selectedTakeIdx)];
+                  if (take) {
+                    return (
+                      <small className="take-selector-hint">
+                        Files will be saved to: {activeShoot.name}/Take_{String(take.take_number).padStart(2, '0')}/GoPro[serial]/
+                        {!take.stopped_at && <strong> (take still in progress — stop recording first)</strong>}
+                      </small>
+                    );
+                  }
+                  return <small className="take-selector-hint">No completed takes yet. Stop recording to create a downloadable take.</small>;
+                })()}
+              </div>
+            )}
 
             <div className="button-group">
               <button
