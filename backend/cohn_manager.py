@@ -46,6 +46,7 @@ class COHNManager:
         self.credentials: Dict[str, dict] = {}
         self.wifi_ssid: Optional[str] = None
         self.wifi_password: Optional[str] = None
+        self.all_networks: Dict[str, dict] = {}
         self._notification_data: Dict[str, asyncio.Queue] = {}
         self._reassembly_buffers: Dict[str, dict] = {}
         self._provisioning_locks: Dict[str, asyncio.Lock] = {}
@@ -54,34 +55,113 @@ class COHNManager:
     # ============== Persistence ==============
 
     def _load(self):
-        """Load credentials from cohn_credentials.json"""
+        """Load credentials from cohn_credentials.json (supports v1 and v2 schema)"""
         if CREDENTIALS_FILE.exists():
             try:
                 with open(CREDENTIALS_FILE, 'r') as f:
                     data = json.load(f)
-                self.wifi_ssid = data.get("wifi_ssid")
-                self.wifi_password = data.get("wifi_password")
-                self.credentials = data.get("cameras", {})
-                logger.info(f"Loaded COHN credentials for {len(self.credentials)} camera(s)")
+
+                if data.get("version") == 2:
+                    # v2 multi-network format
+                    self.all_networks = data.get("networks", {})
+                    self.wifi_ssid = data.get("active_ssid")
+                    if self.wifi_ssid and self.wifi_ssid in self.all_networks:
+                        net = self.all_networks[self.wifi_ssid]
+                        self.wifi_password = net.get("wifi_password")
+                        self.credentials = net.get("cameras", {})
+                    else:
+                        self.wifi_password = None
+                        self.credentials = {}
+                    logger.info(f"Loaded v2 COHN credentials: {len(self.all_networks)} network(s), "
+                                f"active='{self.wifi_ssid}' with {len(self.credentials)} camera(s)")
+                else:
+                    # v1 legacy format — migrate to v2
+                    self.wifi_ssid = data.get("wifi_ssid")
+                    self.wifi_password = data.get("wifi_password")
+                    self.credentials = data.get("cameras", {})
+                    self.all_networks = {}
+                    if self.wifi_ssid:
+                        self.all_networks[self.wifi_ssid] = {
+                            "wifi_password": self.wifi_password,
+                            "cameras": self.credentials.copy()
+                        }
+                    logger.info(f"Migrated v1 COHN credentials to v2: "
+                                f"'{self.wifi_ssid}' with {len(self.credentials)} camera(s)")
+                    self._save()  # Write back as v2
             except Exception as e:
                 logger.error(f"Failed to load COHN credentials: {e}")
                 self.credentials = {}
+                self.all_networks = {}
         else:
             logger.info("No COHN credentials file found")
 
     def _save(self):
-        """Save credentials to cohn_credentials.json"""
+        """Save credentials to cohn_credentials.json (v2 multi-network format)"""
+        # Sync active network's data back into all_networks
+        if self.wifi_ssid:
+            self.all_networks[self.wifi_ssid] = {
+                "wifi_password": self.wifi_password,
+                "cameras": self.credentials.copy()
+            }
         data = {
-            "wifi_ssid": self.wifi_ssid,
-            "wifi_password": self.wifi_password,
-            "cameras": self.credentials
+            "version": 2,
+            "active_ssid": self.wifi_ssid,
+            "networks": self.all_networks
         }
         try:
             with open(CREDENTIALS_FILE, 'w') as f:
                 json.dump(data, f, indent=2)
-            logger.info(f"Saved COHN credentials for {len(self.credentials)} camera(s)")
+            logger.info(f"Saved COHN credentials: {len(self.all_networks)} network(s), "
+                        f"active='{self.wifi_ssid}' with {len(self.credentials)} camera(s)")
         except Exception as e:
             logger.error(f"Failed to save COHN credentials: {e}")
+
+    # ============== Network Switching ==============
+
+    def switch_network(self, ssid: str, wifi_password: Optional[str] = None):
+        """Switch active network. Saves current network state, loads target network's data."""
+        # Save current network state first
+        if self.wifi_ssid:
+            self.all_networks[self.wifi_ssid] = {
+                "wifi_password": self.wifi_password,
+                "cameras": self.credentials.copy()
+            }
+
+        # Load target network
+        if ssid in self.all_networks:
+            net = self.all_networks[ssid]
+            self.wifi_ssid = ssid
+            self.wifi_password = net.get("wifi_password")
+            self.credentials = net.get("cameras", {}).copy()
+            logger.info(f"Switched to network '{ssid}' with {len(self.credentials)} camera(s)")
+        else:
+            # New network — start fresh
+            self.wifi_ssid = ssid
+            self.wifi_password = wifi_password or ""
+            self.credentials = {}
+            logger.info(f"Switched to new network '{ssid}' (no stored cameras)")
+
+        # Override password if explicitly provided (e.g. user updating it)
+        if wifi_password is not None:
+            self.wifi_password = wifi_password
+
+        self._save()
+
+    def get_all_networks(self) -> Dict[str, dict]:
+        """Return summary of all saved networks for the frontend dropdown."""
+        # Sync current state first
+        if self.wifi_ssid:
+            self.all_networks[self.wifi_ssid] = {
+                "wifi_password": self.wifi_password,
+                "cameras": self.credentials.copy()
+            }
+        result = {}
+        for ssid, net in self.all_networks.items():
+            result[ssid] = {
+                "camera_count": len(net.get("cameras", {})),
+                "is_active": ssid == self.wifi_ssid
+            }
+        return result
 
     # ============== Hex Dump Logging (1b) ==============
 
@@ -460,8 +540,12 @@ class COHNManager:
         14. Store credentials
         15. Disconnect BLE
         """
-        self.wifi_ssid = wifi_ssid
-        self.wifi_password = wifi_password
+        # Auto-switch network if provisioning to a different SSID
+        if wifi_ssid != self.wifi_ssid:
+            self.switch_network(wifi_ssid, wifi_password)
+        else:
+            self.wifi_ssid = wifi_ssid
+            self.wifi_password = wifi_password
 
         async def report(step: int, total: int, msg: str):
             logger.info(f"[COHN {serial}] Step {step}/{total}: {msg}")

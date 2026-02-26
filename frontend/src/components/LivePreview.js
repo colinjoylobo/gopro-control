@@ -39,6 +39,10 @@ function LivePreview({ cameras, apiUrl, cohnStatus, onCohnUpdate, subscribeWsMes
   const [wifiPassword, setWifiPassword] = useState(() => localStorage.getItem('gopro_cohn_password') || '');
   const [provisioning, setProvisioning] = useState(null); // serial being provisioned
   const [provisionStep, setProvisionStep] = useState('');
+  const [networks, setNetworks] = useState({}); // {ssid: {camera_count, is_active}}
+  const [isNewNetwork, setIsNewNetwork] = useState(false);
+  const [newSSID, setNewSSID] = useState('');
+  const [newPassword, setNewPassword] = useState('');
 
   // === Settings & Presets state ===
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -219,6 +223,77 @@ function LivePreview({ cameras, apiUrl, cohnStatus, onCohnUpdate, subscribeWsMes
     const interval = setInterval(fetchHealth, 15000);
     return () => clearInterval(interval);
   }, [fetchHealth]);
+
+  // Fetch saved networks from backend on mount and when COHN status updates
+  const fetchNetworks = useCallback(async () => {
+    try {
+      const response = await axios.get(`${apiUrl}/api/cohn/networks`);
+      setNetworks(response.data.networks || {});
+      const activeSSID = response.data.active_ssid;
+      if (activeSSID) {
+        setWifiSSID(activeSSID);
+      }
+    } catch (error) {
+      console.error('Failed to fetch networks:', error);
+    }
+  }, [apiUrl]);
+
+  useEffect(() => {
+    fetchNetworks();
+  }, [fetchNetworks]);
+
+  // Handle switching to a saved network
+  const handleNetworkSwitch = async (ssid) => {
+    if (ssid === '__new__') {
+      setIsNewNetwork(true);
+      setNewSSID('');
+      setNewPassword('');
+      return;
+    }
+    setIsNewNetwork(false);
+    setMessage({ type: 'info', text: `Switching to network "${ssid}"...` });
+    try {
+      const response = await axios.post(`${apiUrl}/api/cohn/networks/switch`, { wifi_ssid: ssid });
+      if (response.data.success) {
+        setWifiSSID(response.data.active_ssid);
+        setMessage({ type: 'success', text: `Switched to "${response.data.active_ssid}"` });
+        if (onCohnUpdate) onCohnUpdate();
+        fetchNetworks();
+      }
+    } catch (error) {
+      setMessage({ type: 'error', text: `Switch failed: ${error.response?.data?.detail || error.message}` });
+    }
+    setTimeout(() => setMessage(null), 5000);
+  };
+
+  // Handle adding a new network
+  const handleAddNetwork = async () => {
+    if (!newSSID || !newPassword) {
+      setMessage({ type: 'error', text: 'Enter both SSID and password for the new network.' });
+      setTimeout(() => setMessage(null), 5000);
+      return;
+    }
+    setMessage({ type: 'info', text: `Adding network "${newSSID}"...` });
+    try {
+      const response = await axios.post(`${apiUrl}/api/cohn/networks/switch`, {
+        wifi_ssid: newSSID,
+        wifi_password: newPassword,
+      });
+      if (response.data.success) {
+        setWifiSSID(response.data.active_ssid);
+        setWifiPassword(newPassword);
+        setIsNewNetwork(false);
+        setNewSSID('');
+        setNewPassword('');
+        setMessage({ type: 'success', text: `Added and switched to "${response.data.active_ssid}"` });
+        if (onCohnUpdate) onCohnUpdate();
+        fetchNetworks();
+      }
+    } catch (error) {
+      setMessage({ type: 'error', text: `Add network failed: ${error.response?.data?.detail || error.message}` });
+    }
+    setTimeout(() => setMessage(null), 5000);
+  };
 
   // Check WiFi status (single mode only)
   useEffect(() => {
@@ -769,21 +844,55 @@ function LivePreview({ cameras, apiUrl, cohnStatus, onCohnUpdate, subscribeWsMes
                 Provision cameras to join your home WiFi. Once provisioned, all cameras can stream simultaneously.
               </p>
               <div className="input-row">
-                <input
-                  type="text"
-                  placeholder="Home WiFi SSID"
-                  value={wifiSSID}
-                  onChange={(e) => setWifiSSID(e.target.value)}
+                <select
                   className="wifi-input"
-                />
-                <input
-                  type="password"
-                  placeholder="WiFi Password"
-                  value={wifiPassword}
-                  onChange={(e) => setWifiPassword(e.target.value)}
-                  className="wifi-input"
-                />
+                  value={isNewNetwork ? '__new__' : wifiSSID}
+                  onChange={(e) => handleNetworkSwitch(e.target.value)}
+                >
+                  <option value="" disabled>Select WiFi network...</option>
+                  {Object.entries(networks).map(([ssid, info]) => (
+                    <option key={ssid} value={ssid}>
+                      {ssid} ({info.camera_count} camera{info.camera_count !== 1 ? 's' : ''})
+                      {info.is_active ? ' *' : ''}
+                    </option>
+                  ))}
+                  <option value="__new__">+ New network...</option>
+                </select>
+                {!isNewNetwork && (
+                  <input
+                    type="password"
+                    placeholder="WiFi Password"
+                    value={wifiPassword}
+                    onChange={(e) => setWifiPassword(e.target.value)}
+                    className="wifi-input"
+                  />
+                )}
               </div>
+              {isNewNetwork && (
+                <div className="input-row" style={{ marginTop: '0.5rem' }}>
+                  <input
+                    type="text"
+                    placeholder="New WiFi SSID"
+                    value={newSSID}
+                    onChange={(e) => setNewSSID(e.target.value)}
+                    className="wifi-input"
+                  />
+                  <input
+                    type="password"
+                    placeholder="WiFi Password"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    className="wifi-input"
+                  />
+                  <button
+                    className="btn btn-primary btn-sm"
+                    onClick={handleAddNetwork}
+                    disabled={!newSSID || !newPassword}
+                  >
+                    Add Network
+                  </button>
+                </div>
+              )}
             </div>
 
             <div className="provision-list">

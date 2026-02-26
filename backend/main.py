@@ -2501,6 +2501,53 @@ async def reenable_cohn_single(serial: str):
     return result
 
 
+@app.get("/api/cohn/networks")
+async def get_cohn_networks():
+    """List all saved WiFi networks and their camera counts"""
+    networks = cohn_manager.get_all_networks()
+    return {
+        "active_ssid": cohn_manager.wifi_ssid,
+        "networks": networks
+    }
+
+
+@app.post("/api/cohn/networks/switch")
+async def switch_cohn_network(body: dict):
+    """Switch to a different WiFi network's stored credentials"""
+    wifi_ssid = body.get("wifi_ssid")
+    if not wifi_ssid:
+        raise HTTPException(status_code=400, detail="wifi_ssid is required")
+
+    wifi_password = body.get("wifi_password")
+
+    # Require password for new networks
+    networks = cohn_manager.get_all_networks()
+    if wifi_ssid not in networks and not wifi_password:
+        raise HTTPException(status_code=400, detail="wifi_password is required for new networks")
+
+    cohn_manager.switch_network(wifi_ssid, wifi_password)
+
+    # Return fresh status for the switched network
+    all_creds = cohn_manager.get_all_credentials()
+    online_status = await cohn_manager.check_all_cameras()
+    cameras = {}
+    for serial, creds in all_creds.items():
+        cameras[serial] = {
+            "provisioned": True,
+            "ip_address": creds.get("ip_address"),
+            "username": creds.get("username"),
+            "mac_address": creds.get("mac_address"),
+            "provisioned_at": creds.get("provisioned_at"),
+            "online": online_status.get(serial, False)
+        }
+
+    return {
+        "success": True,
+        "active_ssid": cohn_manager.wifi_ssid,
+        "cameras": cameras
+    }
+
+
 @app.get("/api/cohn/status")
 async def get_cohn_status():
     """Get COHN status for all cameras"""
@@ -2523,7 +2570,7 @@ async def get_cohn_status():
         if serial not in result:
             result[serial] = {"provisioned": False, "online": False}
 
-    return {"cameras": result}
+    return {"cameras": result, "active_ssid": cohn_manager.wifi_ssid}
 
 
 @app.get("/api/cohn/status/{serial}")
