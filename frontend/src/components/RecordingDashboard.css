@@ -216,10 +216,15 @@
   align-items: center;
 }
 
+.create-shoot-row .btn {
+  flex-shrink: 0;
+}
+
 .shoot-name-input {
   flex: 1;
+  min-width: 180px;
   padding: var(--space-sm) var(--space-md);
-  background: var(--bg-base);
+  background: var(--bg-surface);
   border: 2px solid var(--border-default);
   border-radius: var(--radius-lg);
   color: var(--text-primary);
@@ -232,7 +237,7 @@
 }
 
 .shoot-name-input::placeholder {
-  color: var(--text-faint);
+  color: var(--text-dimmed);
 }
 
 .shoot-select {
@@ -551,6 +556,159 @@
 .take-item.take-active .take-item-status {
   color: var(--danger);
   font-weight: 600;
+}
+
+/* ============== Take Management ============== */
+.take-management-card {
+  margin-top: var(--space-xl);
+}
+
+.take-management-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--space-lg);
+}
+
+.take-management-header h3 {
+  margin: 0;
+  font-size: 1.1rem;
+  color: var(--text-primary);
+}
+
+.new-take-form {
+  display: flex;
+  gap: var(--space-md);
+  align-items: center;
+  margin-bottom: var(--space-lg);
+  padding: var(--space-md);
+  background: var(--bg-base);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+}
+
+.take-name-input {
+  flex: 1;
+  padding: var(--space-sm) var(--space-md);
+  background: var(--bg-surface);
+  border: 2px solid var(--border-default);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-size: 0.85rem;
+}
+
+.take-name-input:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.take-name-input::placeholder {
+  color: var(--text-faint);
+}
+
+.take-item {
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.take-item:hover {
+  background: rgba(102, 126, 234, 0.05);
+}
+
+.take-item.take-expanded {
+  background: var(--bg-surface);
+  border-color: var(--accent);
+}
+
+.take-item-header {
+  cursor: pointer;
+}
+
+.take-item-left {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+}
+
+.take-item-right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+}
+
+.take-name-label {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  font-style: italic;
+}
+
+.take-expand-icon {
+  font-size: 0.7rem;
+  color: var(--text-dimmed);
+  transition: transform 0.2s;
+}
+
+.take-detail {
+  padding: var(--space-md) var(--space-lg);
+  border-top: 1px solid var(--border-default);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.take-detail-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.take-edit-name {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+}
+
+.take-detail-cameras {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+}
+
+.take-detail-label {
+  font-size: 0.8rem;
+  color: var(--text-dimmed);
+  font-weight: 500;
+}
+
+.take-camera-chip {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  background: rgba(102, 126, 234, 0.12);
+  color: var(--accent);
+  border-radius: var(--radius-pill);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.take-detail-times {
+  display: flex;
+  gap: var(--space-lg);
+  flex-wrap: wrap;
+}
+
+.take-time {
+  font-size: 0.78rem;
+  color: var(--text-dimmed);
+  font-family: var(--font-mono);
+}
+
+.shoot-hint {
+  color: var(--text-dimmed);
+  font-size: 0.9rem;
+  font-style: italic;
+  margin-top: var(--space-md);
 }
 
 /* ============== Responsive ============== */

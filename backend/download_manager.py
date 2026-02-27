@@ -1,6 +1,7 @@
 """
 Download Manager for GoPro Videos
 """
+import asyncio
 import re
 import requests
 import httpx
@@ -139,7 +140,7 @@ class DownloadManager:
     def erase_all_media(self) -> bool:
         """Delete all media from GoPro SD card. Requires WiFi connection to camera."""
         try:
-            resp = requests.delete(f"{GOPRO_IP}/gopro/media/all", timeout=30)
+            resp = requests.get(f"{GOPRO_IP}/gp/gpControl/command/storage/delete/all", timeout=30)
             if resp.status_code == 200:
                 logger.info("Successfully erased all media from camera")
                 return True
@@ -646,3 +647,290 @@ class DownloadManager:
             grouped[folder].append(file_info)
 
         return grouped
+
+    # ============== Async COHN Methods ==============
+
+    async def async_get_media_list(self, base_url: str, auth_header: str) -> List[Dict]:
+        """Get all media files via COHN HTTPS, sorted by date (newest first)"""
+        try:
+            headers = {"Authorization": auth_header} if auth_header else {}
+            async with httpx.AsyncClient(verify=False, timeout=15.0) as client:
+                resp = await client.get(f"{base_url}/gopro/media/list", headers=headers)
+                data = resp.json()
+
+            if not data.get("media"):
+                return []
+
+            all_files = []
+            for media_dir in data["media"]:
+                dir_name = media_dir["d"]
+                for file_info in media_dir["fs"]:
+                    file_name = file_info["n"]
+                    try:
+                        file_size = int(file_info.get("s", 0))
+                    except (ValueError, TypeError):
+                        file_size = 0
+                    try:
+                        mod_time = int(file_info.get("mod", 0))
+                    except (ValueError, TypeError):
+                        mod_time = 0
+
+                    all_files.append({
+                        "directory": dir_name,
+                        "filename": file_name,
+                        "size": file_size,
+                        "mod_time": mod_time,
+                        "url": f"{base_url}/videos/DCIM/{dir_name}/{file_name}"
+                    })
+
+            all_files.sort(key=lambda x: x["mod_time"], reverse=True)
+            return all_files
+
+        except Exception as e:
+            logger.error(f"Failed to get media list via COHN: {e}")
+            return []
+
+    async def async_get_media_summary(self, base_url: str, auth_header: str) -> Dict:
+        """Get summary of media on camera via COHN HTTPS"""
+        media_list = await self.async_get_media_list(base_url, auth_header)
+
+        if not media_list:
+            return {
+                "total_files": 0,
+                "total_size_bytes": 0,
+                "total_size_human": format_size(0),
+                "video_count": 0,
+                "videos": [],
+                "other_count": 0,
+                "others": []
+            }
+
+        videos = []
+        others = []
+
+        for f in media_list:
+            entry = {
+                "directory": f["directory"],
+                "filename": f["filename"],
+                "size": f["size"],
+                "size_human": format_size(f["size"]),
+                "mod_time": f["mod_time"],
+                "url": f["url"]
+            }
+            if f["filename"].upper().endswith(".MP4"):
+                videos.append(entry)
+            else:
+                others.append(entry)
+
+        total_size = sum(f["size"] for f in media_list)
+
+        return {
+            "total_files": len(media_list),
+            "total_size_bytes": total_size,
+            "total_size_human": format_size(total_size),
+            "video_count": len(videos),
+            "videos": videos,
+            "other_count": len(others),
+            "others": others
+        }
+
+    async def async_download_file(
+        self,
+        url: str,
+        output_path: Path,
+        auth_header: str,
+        progress_callback: Optional[Callable] = None
+    ) -> bool:
+        """Download a file via COHN HTTPS with progress tracking"""
+        try:
+            if output_path.exists():
+                logger.info(f"File already exists: {output_path.name}")
+                return True
+
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Downloading (COHN): {output_path.name}")
+
+            headers = {"Authorization": auth_header} if auth_header else {}
+            async with httpx.AsyncClient(verify=False, timeout=300.0) as client:
+                async with client.stream("GET", url, headers=headers) as resp:
+                    total = int(resp.headers.get('content-length', 0))
+                    downloaded = 0
+
+                    with open(output_path, 'wb') as f:
+                        async for chunk in resp.aiter_bytes(chunk_size=8192):
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            if progress_callback and total > 0:
+                                result = progress_callback(downloaded, total)
+                                if asyncio.iscoroutine(result):
+                                    await result
+
+            mb = output_path.stat().st_size / (1024 * 1024)
+            logger.info(f"Downloaded (COHN): {output_path.name} ({mb:.1f} MB)")
+            return True
+
+        except Exception as e:
+            logger.error(f"COHN download failed: {e}")
+            if output_path.exists():
+                output_path.unlink()
+            return False
+
+    async def async_download_all_from_camera(
+        self,
+        serial: str,
+        base_url: str,
+        auth_header: str,
+        progress_callback: Optional[Callable] = None,
+        max_files: Optional[int] = None,
+        shoot_name: Optional[str] = None,
+        take_number: Optional[int] = None
+    ) -> List[Path]:
+        """Download files from camera via COHN HTTPS"""
+        downloaded_files = []
+
+        try:
+            logger.info("=" * 60)
+            logger.info(f"Starting COHN download for camera {serial}")
+
+            media_list = await self.async_get_media_list(base_url, auth_header)
+            if not media_list:
+                logger.warning("No media files found on camera")
+                return []
+
+            if max_files and max_files > 0:
+                media_list = media_list[:max_files]
+
+            total_files = len(media_list)
+            logger.info(f"Found {total_files} files to download via COHN")
+
+            if shoot_name and take_number is not None:
+                safe_name = self._sanitize_filename(shoot_name)
+                output_base = self.download_dir / safe_name / f"Take_{take_number:02d}" / f"GoPro{serial}"
+            else:
+                today = datetime.now().strftime("%Y-%m-%d")
+                output_base = self.download_dir / f"{today}_GoPro{serial}"
+
+            for idx, media in enumerate(media_list, 1):
+                filename = media["filename"]
+                url = media["url"]
+
+                try:
+                    size_bytes = int(media.get("size", 0))
+                    size_mb = size_bytes / (1024 * 1024)
+                except (ValueError, TypeError):
+                    size_mb = 0
+
+                logger.info(f"[{idx}/{total_files}] {filename} ({size_mb:.1f} MB)")
+                output_path = output_base / filename
+
+                def file_progress(downloaded: int, total: int, _fn=filename, _idx=idx):
+                    if progress_callback:
+                        percent = int((downloaded / total) * 100) if total > 0 else 0
+                        return progress_callback(_fn, _idx, total_files, percent)
+
+                success = await self.async_download_file(url, output_path, auth_header, file_progress)
+                if success:
+                    downloaded_files.append(output_path)
+
+            logger.info(f"COHN download complete: {len(downloaded_files)}/{total_files} files")
+            return downloaded_files
+
+        except Exception as e:
+            logger.error(f"COHN download all failed: {e}", exc_info=True)
+            return downloaded_files
+
+    async def async_download_latest_from_camera(
+        self,
+        serial: str,
+        base_url: str,
+        auth_header: str,
+        progress_callback: Optional[Callable] = None,
+        shoot_name: Optional[str] = None,
+        take_number: Optional[int] = None
+    ) -> List[Path]:
+        """Download only the latest video via COHN HTTPS"""
+        downloaded_files = []
+
+        try:
+            media_list = await self.async_get_media_list(base_url, auth_header)
+            if not media_list:
+                return []
+
+            video_files = [f for f in media_list if f["filename"].upper().endswith(".MP4")]
+            if not video_files:
+                logger.warning("No .MP4 video files found on camera")
+                return []
+
+            latest = video_files[0]
+            filename = latest["filename"]
+            url = latest["url"]
+
+            if shoot_name and take_number is not None:
+                safe_name = self._sanitize_filename(shoot_name)
+                output_path = self.download_dir / safe_name / f"Take_{take_number:02d}" / f"GoPro{serial}" / filename
+            else:
+                today = datetime.now().strftime("%Y-%m-%d")
+                output_path = self.download_dir / f"{today}_GoPro{serial}" / filename
+
+            def file_progress(downloaded: int, total: int):
+                if progress_callback:
+                    percent = int((downloaded / total) * 100) if total > 0 else 0
+                    return progress_callback(filename, 1, 1, percent)
+
+            success = await self.async_download_file(url, output_path, auth_header, file_progress)
+            if success:
+                downloaded_files.append(output_path)
+
+            return downloaded_files
+
+        except Exception as e:
+            logger.error(f"COHN download latest failed: {e}", exc_info=True)
+            return downloaded_files
+
+    async def async_download_selected_from_camera(
+        self,
+        serial: str,
+        base_url: str,
+        auth_header: str,
+        file_list: List[Dict],
+        progress_callback: Optional[Callable] = None,
+        shoot_name: Optional[str] = None,
+        take_number: Optional[int] = None
+    ) -> List[Path]:
+        """Download selected files from camera via COHN HTTPS"""
+        downloaded_files = []
+
+        try:
+            total_files = len(file_list)
+            logger.info(f"Downloading {total_files} selected file(s) via COHN for camera {serial}")
+
+            if shoot_name and take_number is not None:
+                safe_name = self._sanitize_filename(shoot_name)
+                output_base = self.download_dir / safe_name / f"Take_{take_number:02d}" / f"GoPro{serial}"
+            else:
+                today = datetime.now().strftime("%Y-%m-%d")
+                output_base = self.download_dir / f"{today}_GoPro{serial}"
+
+            for idx, file_info in enumerate(file_list, 1):
+                directory = file_info["directory"]
+                filename = file_info["filename"]
+                url = f"{base_url}/videos/DCIM/{directory}/{filename}"
+
+                logger.info(f"[{idx}/{total_files}] {filename}")
+                output_path = output_base / filename
+
+                def file_progress(downloaded: int, total: int, _fn=filename, _idx=idx):
+                    if progress_callback:
+                        percent = int((downloaded / total) * 100) if total > 0 else 0
+                        return progress_callback(_fn, _idx, total_files, percent)
+
+                success = await self.async_download_file(url, output_path, auth_header, file_progress)
+                if success:
+                    downloaded_files.append(output_path)
+
+            logger.info(f"Selected COHN download complete: {len(downloaded_files)}/{total_files} files")
+            return downloaded_files
+
+        except Exception as e:
+            logger.error(f"COHN selected download failed: {e}", exc_info=True)
+            return downloaded_files

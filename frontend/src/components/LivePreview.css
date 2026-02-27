@@ -1190,6 +1190,24 @@ select.wifi-input {
   border: 1px solid rgba(16, 185, 129, 0.3);
 }
 
+/* ============== Settings Link Hint ============== */
+.settings-link-hint {
+  padding: var(--space-md) var(--space-lg);
+  margin-bottom: var(--space-lg);
+  background: rgba(102, 126, 234, 0.08);
+  border: 1px solid rgba(102, 126, 234, 0.2);
+  border-radius: var(--radius-lg);
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.settings-link-hint a,
+.settings-link-hint strong {
+  color: var(--accent);
+  font-weight: 600;
+}
+
 /* ============== Per-Camera Actions ============== */
 .per-cam-actions {
   display: flex;

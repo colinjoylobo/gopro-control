@@ -38,7 +38,7 @@ const ANTI_FLICKER_OPTIONS = [
   { value: 'HZ_50', label: '50Hz' },
 ];
 
-function PresetManager({ cameras, apiUrl }) {
+function PresetManager({ cameras, apiUrl, cohnStatus }) {
   const [presets, setPresets] = useState({});
   const [selectedPreset, setSelectedPreset] = useState('');
   const [message, setMessage] = useState(null);
@@ -47,6 +47,8 @@ function PresetManager({ cameras, apiUrl }) {
   const [capturing, setCapturing] = useState(false);
   const [captureCamera, setCaptureCamera] = useState('');
   const [captureName, setCaptureName] = useState('');
+  const [gpsEnabled, setGpsEnabled] = useState(true);
+  const [applyTarget, setApplyTarget] = useState('all');
 
   // Form state for creating new preset
   const [showForm, setShowForm] = useState(false);
@@ -60,6 +62,8 @@ function PresetManager({ cameras, apiUrl }) {
   });
 
   const connectedCameras = cameras.filter(cam => cam.connected);
+  const cohnCameras = Object.entries(cohnStatus || {}).filter(([_, c]) => c.provisioned && c.online);
+  const useCohn = cohnCameras.length > 0;
 
   const fetchPresets = useCallback(async () => {
     try {
@@ -127,10 +131,26 @@ function PresetManager({ cameras, apiUrl }) {
   const handleApplyToAll = async () => {
     if (!selectedPreset) return;
     setApplying(true);
+    const targetLabel = applyTarget === 'all' ? 'all cameras' : applyTarget;
     try {
-      const response = await axios.post(`${apiUrl}/api/presets/${encodeURIComponent(selectedPreset)}/apply`, {});
+      let response;
+      if (useCohn) {
+        const payload = { settings: presets[selectedPreset] };
+        if (applyTarget !== 'all') {
+          payload.serials = [applyTarget];
+        }
+        response = await axios.post(`${apiUrl}/api/cohn/settings/apply`, payload);
+      } else {
+        if (applyTarget !== 'all') {
+          response = await axios.post(`${apiUrl}/api/presets/${encodeURIComponent(selectedPreset)}/apply`, {
+            serials: [applyTarget],
+          });
+        } else {
+          response = await axios.post(`${apiUrl}/api/presets/${encodeURIComponent(selectedPreset)}/apply`, {});
+        }
+      }
       if (response.data.success) {
-        setMessage({ type: 'success', text: `Preset "${selectedPreset}" applied to all cameras!` });
+        setMessage({ type: 'success', text: `Preset "${selectedPreset}" applied to ${targetLabel}!` });
       }
       setTimeout(() => setMessage(null), 5000);
     } catch (error) {
@@ -138,6 +158,19 @@ function PresetManager({ cameras, apiUrl }) {
       setTimeout(() => setMessage(null), 5000);
     } finally {
       setApplying(false);
+    }
+  };
+
+  const handleGpsToggle = async () => {
+    try {
+      await axios.post(`${apiUrl}/api/cohn/settings/apply`, {
+        settings: { gps: gpsEnabled ? 'ON' : 'OFF' },
+      });
+      setMessage({ type: 'success', text: `GPS ${gpsEnabled ? 'enabled' : 'disabled'} on cameras` });
+      setTimeout(() => setMessage(null), 3000);
+    } catch (error) {
+      setMessage({ type: 'error', text: `GPS toggle failed: ${error.response?.data?.detail || error.message}` });
+      setTimeout(() => setMessage(null), 5000);
     }
   };
 
@@ -196,13 +229,33 @@ function PresetManager({ cameras, apiUrl }) {
               ))}
             </select>
 
+            <select
+              className="apply-target-select"
+              value={applyTarget}
+              onChange={(e) => setApplyTarget(e.target.value)}
+            >
+              <option value="all">All Cameras</option>
+              {connectedCameras.map(cam => (
+                <option key={cam.serial} value={cam.serial}>
+                  {cam.name || `GoPro ${cam.serial}`}
+                </option>
+              ))}
+            </select>
+
             <button
               className="btn btn-primary btn-sm"
               onClick={handleApplyToAll}
               disabled={!selectedPreset || connectedCameras.length === 0 || applying}
             >
-              {applying ? 'Applying...' : 'Apply to All'}
+              {applying ? 'Applying...' : applyTarget === 'all' ? 'Apply to All' : 'Apply'}
             </button>
+
+            <span
+              className="transport-indicator"
+              style={{ color: useCohn ? '#2ecc71' : '#999', fontWeight: 'bold', fontSize: '0.85em', whiteSpace: 'nowrap' }}
+            >
+              {useCohn ? 'via COHN' : 'via BLE'}
+            </span>
 
             {selectedPreset && (
               <button
@@ -238,6 +291,25 @@ function PresetManager({ cameras, apiUrl }) {
                   <span className="detail-label">Anti-Flicker</span>
                   <span className="detail-value">{formatSettingValue('anti_flicker', currentPresetData.anti_flicker)}</span>
                 </div>
+              </div>
+
+              <div className="gps-toggle-row" style={{ marginTop: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <label style={{ fontWeight: 'bold', fontSize: '0.85em' }}>GPS</label>
+                <button
+                  className={`btn btn-sm ${gpsEnabled ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => setGpsEnabled(prev => !prev)}
+                  style={{ minWidth: '50px' }}
+                >
+                  {gpsEnabled ? 'ON' : 'OFF'}
+                </button>
+                <button
+                  className="btn btn-sm btn-secondary"
+                  onClick={handleGpsToggle}
+                  disabled={!useCohn}
+                  title={!useCohn ? 'Requires COHN connection' : 'Apply GPS setting to cameras'}
+                >
+                  Apply GPS
+                </button>
               </div>
             </div>
           )}

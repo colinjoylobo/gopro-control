@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import Hls from 'hls.js';
+import mpegts from 'mpegts.js';
 import './LivePreview.css';
 
 const LAYOUTS = [
@@ -44,21 +45,11 @@ function LivePreview({ cameras, apiUrl, cohnStatus, onCohnUpdate, subscribeWsMes
   const [newSSID, setNewSSID] = useState('');
   const [newPassword, setNewPassword] = useState('');
 
-  // === Settings & Presets state ===
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsValues, setSettingsValues] = useState(() => {
-    const saved = localStorage.getItem('gopro_settings_values');
-    if (saved) try { return JSON.parse(saved); } catch(e) {}
-    return { resolution: '4K', fps: '60', video_fov: 'Linear', hypersmooth: 'Off', anti_flicker: '60Hz' };
-  });
-  const [gpsEnabled, setGpsEnabled] = useState(true);
-  const [applyingSettings, setApplyingSettings] = useState(false);
-
   // === Refs ===
   const singleVideoRef = useRef(null);
   const singleHlsRef = useRef(null);
   const videoRefsMap = useRef({}); // {serial: videoElement}
-  const hlsInstancesMap = useRef({}); // {serial: hlsInstance}
+  const hlsInstancesMap = useRef({}); // {serial: mpegts player or hls instance}
   const gridRef = useRef(null);
 
   // Persist mode
@@ -78,71 +69,6 @@ function LivePreview({ cameras, apiUrl, cohnStatus, onCohnUpdate, subscribeWsMes
   useEffect(() => {
     localStorage.setItem('gopro_cohn_password', wifiPassword);
   }, [wifiPassword]);
-
-  // Persist settings values
-  useEffect(() => {
-    localStorage.setItem('gopro_settings_values', JSON.stringify(settingsValues));
-  }, [settingsValues]);
-
-  // Settings dropdown options
-  const SETTINGS_OPTIONS = {
-    resolution: ['5.3K', '4K', '2.7K', '1080'],
-    fps: ['240', '200', '120', '100', '60', '50', '30', '25', '24'],
-    video_fov: ['Wide', 'Linear', 'Narrow', 'SuperView'],
-    hypersmooth: ['Off', 'On', 'High', 'Boost'],
-    anti_flicker: [
-      { value: '60Hz', label: '60Hz (NTSC)' },
-      { value: '50Hz', label: '50Hz (PAL)' },
-    ],
-  };
-
-  const SETTINGS_LABELS = {
-    resolution: 'Resolution',
-    fps: 'FPS',
-    video_fov: 'FOV / Lens',
-    hypersmooth: 'HyperSmooth',
-    anti_flicker: 'Anti-Flicker',
-  };
-
-  const handleApplySettings = async (targetSerials = null) => {
-    setApplyingSettings(true);
-    const label = targetSerials ? `camera ${targetSerials[0]}` : 'all cameras';
-    setMessage({ type: 'info', text: `Applying settings to ${label}...` });
-    try {
-      const allSettings = { ...settingsValues, gps: gpsEnabled ? 'On' : 'Off' };
-      const payload = { settings: allSettings };
-      if (targetSerials) payload.serials = targetSerials;
-      const response = await axios.post(`${apiUrl}/api/cohn/settings/apply`, payload, { timeout: 30000 });
-      const results = response.data.results || {};
-      const successCount = Object.values(results).filter(r =>
-        Object.values(r).every(v => v.success !== false)
-      ).length;
-      const totalCount = Object.keys(results).length;
-      setMessage({
-        type: successCount === totalCount ? 'success' : 'warning',
-        text: `Settings applied to ${successCount}/${totalCount} camera(s)`
-      });
-    } catch (error) {
-      setMessage({ type: 'error', text: `Apply settings failed: ${error.response?.data?.detail || error.message}` });
-    }
-    setApplyingSettings(false);
-    setTimeout(() => setMessage(null), 5000);
-  };
-
-  const handleToggleGps = async () => {
-    const newValue = !gpsEnabled;
-    setMessage({ type: 'info', text: `${newValue ? 'Enabling' : 'Disabling'} GPS on all cameras...` });
-    try {
-      await axios.post(`${apiUrl}/api/cohn/settings/apply`, {
-        settings: { gps: newValue ? 'ON' : 'OFF' },
-      }, { timeout: 15000 });
-      setGpsEnabled(newValue);
-      setMessage({ type: 'success', text: `GPS ${newValue ? 'enabled' : 'disabled'} on all cameras` });
-    } catch (error) {
-      setMessage({ type: 'error', text: `GPS toggle failed: ${error.response?.data?.detail || error.message}` });
-    }
-    setTimeout(() => setMessage(null), 5000);
-  };
 
   // Auto-select first camera (single mode)
   useEffect(() => {
@@ -329,7 +255,20 @@ function LivePreview({ cameras, apiUrl, cohnStatus, onCohnUpdate, subscribeWsMes
 
       if (Hls.isSupported()) {
         if (singleHlsRef.current) singleHlsRef.current.destroy();
-        const hls = new Hls({ enableWorker: true, lowLatencyMode: true, backBufferLength: 90 });
+        const hls = new Hls({
+          enableWorker: true,
+          lowLatencyMode: true,
+          liveSyncDuration: 1,
+          liveMaxLatencyDuration: 3,
+          liveDurationInfinity: true,
+          highBufferWatchdogPeriod: 1,
+          maxBufferLength: 2,
+          maxMaxBufferLength: 3,
+          backBufferLength: 0,
+          manifestLoadingMaxRetry: 10,
+          levelLoadingMaxRetry: 10,
+          fragLoadingMaxRetry: 10,
+        });
         hls.loadSource(streamUrl);
         hls.attachMedia(singleVideoRef.current);
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
@@ -358,45 +297,49 @@ function LivePreview({ cameras, apiUrl, cohnStatus, onCohnUpdate, subscribeWsMes
     };
   }, [streamUrl, wifiConnected, apiUrl, mode]);
 
-  // COHN multi-camera HLS effect: attach/detach HLS for each streaming camera
+  // COHN multi-camera mpegts.js effect: direct MPEG-TS streaming (no HLS)
   useEffect(() => {
     if (mode !== 'cohn') return;
 
     Object.entries(cohnCameras).forEach(([serial, cam]) => {
       const videoEl = videoRefsMap.current[serial];
       if (cam.streaming && cam.streamUrl && videoEl) {
-        // Already has an HLS instance for this URL - skip
+        // Already has a player for this URL - skip
         if (hlsInstancesMap.current[serial]) return;
 
-        if (Hls.isSupported()) {
-          const hls = new Hls({ enableWorker: true, lowLatencyMode: true, backBufferLength: 90 });
-          hls.loadSource(cam.streamUrl);
-          hls.attachMedia(videoEl);
-          hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        if (mpegts.isSupported()) {
+          const player = mpegts.createPlayer({
+            type: 'mpegts',
+            isLive: true,
+            url: cam.streamUrl,
+          }, {
+            enableWorker: true,
+            liveBufferLatencyChasing: true,
+            liveBufferLatencyMaxLatency: 1.5,
+            liveBufferLatencyMinRemain: 0.3,
+            autoCleanupSourceBuffer: true,
+            autoCleanupMaxBackwardDuration: 5,
+            autoCleanupMinBackwardDuration: 3,
+          });
+          player.attachMediaElement(videoEl);
+          player.load();
+          videoEl.addEventListener('canplay', () => {
             videoEl.play().catch(() => {});
-          });
-          hls.on(Hls.Events.ERROR, (_event, data) => {
-            if (data.fatal) {
-              if (data.type === Hls.ErrorTypes.NETWORK_ERROR) hls.startLoad();
-              else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
-              else hls.destroy();
-            }
-          });
-          hlsInstancesMap.current[serial] = hls;
-        } else if (videoEl.canPlayType('application/vnd.apple.mpegurl')) {
-          videoEl.src = cam.streamUrl;
-          videoEl.addEventListener('loadedmetadata', () => videoEl.play());
+          }, { once: true });
+          hlsInstancesMap.current[serial] = player;
         }
       } else if (!cam.streaming && hlsInstancesMap.current[serial]) {
-        hlsInstancesMap.current[serial].destroy();
+        try {
+          hlsInstancesMap.current[serial].destroy();
+        } catch (e) { /* ignore */ }
         delete hlsInstancesMap.current[serial];
       }
     });
 
     // Cleanup on unmount
     return () => {
-      Object.values(hlsInstancesMap.current).forEach(hls => {
-        try { hls.destroy(); } catch (e) { /* ignore */ }
+      Object.values(hlsInstancesMap.current).forEach(player => {
+        try { player.destroy(); } catch (e) { /* ignore */ }
       });
       hlsInstancesMap.current = {};
     };
@@ -755,20 +698,6 @@ function LivePreview({ cameras, apiUrl, cohnStatus, onCohnUpdate, subscribeWsMes
               </div>
             )}
 
-            {/* Per-Camera Actions */}
-            {mode === 'cohn' && cohn?.provisioned && cohn?.online && (
-              <div className="per-cam-actions">
-                <button
-                  className="btn btn-secondary btn-xs"
-                  onClick={() => handleApplySettings([camera.serial])}
-                  disabled={applyingSettings}
-                  title="Apply current settings to this camera"
-                >
-                  Apply Settings
-                </button>
-              </div>
-            )}
-
             {/* Preview Button */}
             <button
               className="btn btn-preview"
@@ -970,61 +899,9 @@ function LivePreview({ cameras, apiUrl, cohnStatus, onCohnUpdate, subscribeWsMes
             </div>
           )}
 
-          {/* Camera Settings Panel */}
           {provisionedCount > 0 && (
-            <div className="settings-panel">
-              <button
-                className="settings-toggle"
-                onClick={() => setSettingsOpen(!settingsOpen)}
-              >
-                <span className="settings-toggle-label">Camera Settings</span>
-                <span className={`settings-toggle-arrow ${settingsOpen ? 'open' : ''}`}>&#9662;</span>
-              </button>
-
-              {settingsOpen && (
-                <div className="settings-body">
-                  {/* Settings Grid */}
-                  <div className="settings-grid">
-                    {Object.entries(SETTINGS_OPTIONS).map(([key, options]) => (
-                      <div key={key} className="setting-field">
-                        <label className="setting-label">{SETTINGS_LABELS[key]}</label>
-                        <select
-                          className="setting-select"
-                          value={settingsValues[key]}
-                          onChange={(e) => setSettingsValues(prev => ({ ...prev, [key]: e.target.value }))}
-                        >
-                          {options.map(opt => {
-                            const val = typeof opt === 'object' ? opt.value : opt;
-                            const label = typeof opt === 'object' ? opt.label : opt;
-                            return <option key={val} value={val}>{label}</option>;
-                          })}
-                        </select>
-                      </div>
-                    ))}
-
-                    {/* GPS Toggle */}
-                    <div className="setting-field">
-                      <label className="setting-label">GPS</label>
-                      <button
-                        className={`gps-toggle-btn ${gpsEnabled ? 'gps-on' : 'gps-off'}`}
-                        onClick={handleToggleGps}
-                      >
-                        {gpsEnabled ? 'ON' : 'OFF'}
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="settings-actions">
-                    <button
-                      className="btn btn-primary btn-sm"
-                      onClick={handleApplySettings}
-                      disabled={applyingSettings}
-                    >
-                      {applyingSettings ? 'Applying...' : 'Apply to All Cameras'}
-                    </button>
-                  </div>
-                </div>
-              )}
+            <div className="settings-link-hint">
+              Adjust camera settings in the <strong>Camera Management</strong> tab (Preset Manager)
             </div>
           )}
 

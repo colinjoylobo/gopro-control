@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import './DownloadUpload.css';
 
-function DownloadUpload({ cameras, apiUrl, downloadWsMessage, activeShoot }) {
+function DownloadUpload({ cameras, apiUrl, downloadWsMessage, activeShoot, cohnStatus }) {
   const [downloadedFiles, setDownloadedFiles] = useState([]);
   const [downloading, setDownloading] = useState(false);
   const [uploadConfig, setUploadConfig] = useState({
@@ -32,12 +32,18 @@ function DownloadUpload({ cameras, apiUrl, downloadWsMessage, activeShoot }) {
   const [bulkEraseInput, setBulkEraseInput] = useState('');
   const [bulkErasing, setBulkErasing] = useState(false);
   const [bulkEraseProgress, setBulkEraseProgress] = useState(null); // { current, total, serial }
+  const [s3Expanded, setS3Expanded] = useState(() => localStorage.getItem('gopro_s3_expanded') === 'true');
 
   const connectedCameras = cameras.filter(cam => cam.connected);
   const sortedCameras = [...cameras].sort((a, b) => {
     if (a.connected && !b.connected) return -1;
     if (!a.connected && b.connected) return 1;
     return 0;
+  });
+
+  const allCohn = connectedCameras.length > 0 && connectedCameras.every(cam => {
+    const cohn = (cohnStatus || {})[cam.serial];
+    return cohn && cohn.provisioned && cohn.online;
   });
 
   useEffect(() => {
@@ -59,10 +65,17 @@ function DownloadUpload({ cameras, apiUrl, downloadWsMessage, activeShoot }) {
     }
   }, [downloadWsMessage]);
 
+  // Persist S3 section expanded state
+  useEffect(() => {
+    localStorage.setItem('gopro_s3_expanded', s3Expanded);
+  }, [s3Expanded]);
+
   const handleWebSocketMessage = (data) => {
     if (data.type === 'download_status') {
-      // Show WiFi connection status
-      if (data.status === 'connecting_wifi') {
+      // COHN: skip WiFi statuses, go straight to downloading
+      if (data.status === 'downloading') {
+        setMessage({ type: 'info', text: data.message || 'Downloading...' });
+      } else if (data.status === 'connecting_wifi') {
         setMessage({ type: 'info', text: data.message || 'Connecting to camera WiFi...' });
       } else if (data.status === 'wifi_connected') {
         setMessage({ type: 'success', text: data.message || 'WiFi connected! Starting download...' });
@@ -70,10 +83,10 @@ function DownloadUpload({ cameras, apiUrl, downloadWsMessage, activeShoot }) {
         setMessage({ type: 'info', text: data.message || 'Reconnecting to internet WiFi...' });
       } else if (data.status === 'wifi_restored') {
         setMessage({ type: 'success', text: data.message || 'WiFi restored! Ready to upload.' });
-        fetchCurrentWiFi();  // Refresh WiFi status
+        fetchCurrentWiFi();
       } else if (data.status === 'wifi_manual_needed') {
         setMessage({ type: 'warning', text: data.message || 'Please manually reconnect to your WiFi' });
-        fetchCurrentWiFi();  // Refresh WiFi status
+        fetchCurrentWiFi();
       }
     } else if (data.type === 'download_progress') {
       setDownloadProgress(prev => ({
@@ -92,8 +105,11 @@ function DownloadUpload({ cameras, apiUrl, downloadWsMessage, activeShoot }) {
         return newProgress;
       });
       fetchDownloadedFiles();
-      fetchCurrentWiFi();  // Refresh WiFi status after download
-      setMessage({ type: 'success', text: 'Download complete! WiFi has been switched back.' });
+      fetchCurrentWiFi();
+      const completeText = data.transport === 'cohn'
+        ? 'Download complete!'
+        : 'Download complete! WiFi has been switched back.';
+      setMessage({ type: 'success', text: completeText });
       setTimeout(() => setMessage(null), 5000);
     } else if (data.type === 'download_error') {
       setDownloadProgress(prev => {
@@ -119,7 +135,6 @@ function DownloadUpload({ cameras, apiUrl, downloadWsMessage, activeShoot }) {
       setErasing(null);
       if (data.success) {
         setMessage({ type: 'success', text: `SD card erased on camera ${data.serial}` });
-        // Clear browse files for this camera
         setBrowseFiles(prev => { const n = {...prev}; delete n[data.serial]; return n; });
       } else {
         setMessage({ type: 'error', text: `Failed to erase SD card on camera ${data.serial}` });
@@ -274,7 +289,7 @@ function DownloadUpload({ cameras, apiUrl, downloadWsMessage, activeShoot }) {
 
     setMessage({
       type: 'info',
-      text: `Connecting to ${camera.name || `GoPro ${serial}`} WiFi...`
+      text: `Starting download from ${camera.name || `GoPro ${serial}`}...`
     });
 
     try {
@@ -339,104 +354,68 @@ function DownloadUpload({ cameras, apiUrl, downloadWsMessage, activeShoot }) {
 
     setDownloading(true);
     const totalCameras = connectedCameras.length;
-    let successCount = 0;
-    let failCount = 0;
 
-    setMessage({
-      type: 'info',
-      text: `Starting sequential download from ${totalCameras} camera(s)...`
-    });
+    // Build common params
+    const dlParams = {};
+    if (maxFiles) dlParams.max_files = parseInt(maxFiles);
+    if (activeShoot) {
+      const take = getSelectedTake();
+      if (take && take.stopped_at) {
+        dlParams.shoot_name = activeShoot.name;
+        dlParams.take_number = take.take_number;
+      }
+    }
 
-    // Download from each camera sequentially
-    for (let i = 0; i < connectedCameras.length; i++) {
-      const camera = connectedCameras[i];
-      const currentCameraNum = i + 1;
-      const cameraName = camera.name || `GoPro ${camera.serial}`;
-
-      // Update bulk download progress
-      setBulkDownloadProgress({
-        currentCamera: currentCameraNum,
-        totalCameras: totalCameras,
-        cameraName: cameraName,
-        serial: camera.serial
-      });
-
-      // Set individual camera progress
+    // Set initial progress for all cameras
+    connectedCameras.forEach(camera => {
       setDownloadProgress(prev => ({
         ...prev,
         [camera.serial]: { filename: 'Initializing...', current: 0, total: 0, percent: 0 }
       }));
+    });
 
-      setMessage({
-        type: 'info',
-        text: `📥 [${currentCameraNum}/${totalCameras}] Connecting to ${cameraName} WiFi...`
-      });
+    setBulkDownloadProgress({
+      currentCamera: totalCameras,
+      totalCameras: totalCameras,
+      cameraName: `All ${totalCameras} cameras`,
+      serial: null
+    });
 
-      try {
-        console.log(`[${currentCameraNum}/${totalCameras}] Starting download from camera ${camera.serial}`);
-        if (maxFiles) {
-          console.log(`Limiting download to last ${maxFiles} files`);
-        }
+    setMessage({
+      type: 'info',
+      text: `Downloading from ${totalCameras} camera(s) in parallel via COHN...`
+    });
 
-        const dlParams = {};
-        if (maxFiles) dlParams.max_files = parseInt(maxFiles);
-        // Pass shoot/take info from selected take
-        if (activeShoot) {
-          const take = getSelectedTake();
-          if (take && take.stopped_at) {
-            dlParams.shoot_name = activeShoot.name;
-            dlParams.take_number = take.take_number;
-          }
-        }
+    // Fire all downloads in parallel
+    const downloadPromises = connectedCameras.map(camera =>
+      axios.post(`${apiUrl}/api/download/${camera.serial}`, null, {
+        params: dlParams,
+        timeout: 300000
+      }).then(response => ({ serial: camera.serial, response }))
+       .catch(error => ({ serial: camera.serial, error }))
+    );
 
-        const response = await axios.post(`${apiUrl}/api/download/${camera.serial}`, null, {
-          params: dlParams,
-          timeout: 300000 // 5 minute timeout for large files
-        });
+    const results = await Promise.allSettled(downloadPromises);
 
-        console.log(`[${currentCameraNum}/${totalCameras}] Download response:`, response.data);
+    let successCount = 0;
+    let failCount = 0;
 
-        setMessage({
-          type: 'success',
-          text: `✅ [${currentCameraNum}/${totalCameras}] Downloaded ${response.data.files_count} file(s) from ${cameraName}!`
-        });
-
-        successCount++;
-
-        // Clear individual camera progress
+    results.forEach(result => {
+      const val = result.status === 'fulfilled' ? result.value : result.reason;
+      const serial = val?.serial;
+      if (serial) {
         setDownloadProgress(prev => {
           const newProgress = { ...prev };
-          delete newProgress[camera.serial];
+          delete newProgress[serial];
           return newProgress;
         });
-
-        // Wait 2 seconds before moving to next camera
-        if (i < connectedCameras.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, 2000));
-        }
-
-      } catch (error) {
-        console.error(`[${currentCameraNum}/${totalCameras}] Download error:`, error);
-        failCount++;
-
-        // Clear individual camera progress
-        setDownloadProgress(prev => {
-          const newProgress = { ...prev };
-          delete newProgress[camera.serial];
-          return newProgress;
-        });
-
-        setMessage({
-          type: 'error',
-          text: `❌ [${currentCameraNum}/${totalCameras}] Failed to download from ${cameraName}: ${error.response?.data?.detail || error.message}. Continuing to next camera...`
-        });
-
-        // Wait 2 seconds before moving to next camera even on error
-        if (i < connectedCameras.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, 2000));
-        }
       }
-    }
+      if (result.status === 'fulfilled' && !val.error) {
+        successCount++;
+      } else {
+        failCount++;
+      }
+    });
 
     // Clear bulk download progress
     setBulkDownloadProgress(null);
@@ -449,12 +428,12 @@ function DownloadUpload({ cameras, apiUrl, downloadWsMessage, activeShoot }) {
     if (failCount === 0) {
       setMessage({
         type: 'success',
-        text: `🎉 Successfully downloaded from all ${successCount} camera(s)!`
+        text: `Successfully downloaded from all ${successCount} camera(s)!`
       });
     } else {
       setMessage({
         type: 'warning',
-        text: `⚠️ Download complete: ${successCount} succeeded, ${failCount} failed out of ${totalCameras} cameras.`
+        text: `Download complete: ${successCount} succeeded, ${failCount} failed out of ${totalCameras} cameras.`
       });
     }
 
@@ -636,20 +615,6 @@ function DownloadUpload({ cameras, apiUrl, downloadWsMessage, activeShoot }) {
       setMessage({ type: 'warning', text: `Erased ${successCount}/${connected.length} cameras. Some failed.` });
     }
     setTimeout(() => setMessage(null), 5000);
-  };
-
-  const handleDisconnectCamera = async (serial) => {
-    try {
-      await axios.post(`${apiUrl}/api/cameras/disconnect/${serial}`);
-      setMessage({ type: 'success', text: `Camera ${serial} disconnected` });
-      setTimeout(() => setMessage(null), 3000);
-    } catch (error) {
-      setMessage({
-        type: 'error',
-        text: error.response?.data?.detail || `Disconnect failed: ${error.message}`
-      });
-      setTimeout(() => setMessage(null), 5000);
-    }
   };
 
   const handleTestS3Backend = async () => {
@@ -964,7 +929,7 @@ function DownloadUpload({ cameras, apiUrl, downloadWsMessage, activeShoot }) {
       )}
 
       {/* WiFi Status Warning */}
-      {wifiInfo.on_gopro && (
+      {!allCohn && wifiInfo.on_gopro && (
         <div className="card wifi-warning-card">
           <h2>⚠️ WiFi Connection Warning</h2>
           <div className="alert alert-warning wifi-warning-content">
@@ -988,70 +953,113 @@ function DownloadUpload({ cameras, apiUrl, downloadWsMessage, activeShoot }) {
       )}
 
       {/* Current WiFi Display */}
-      <div className="card">
-        <h2>WiFi Status</h2>
-        <div className="wifi-status-box">
-          <div className="wifi-status-row">
-            <div>
-              <strong>Current WiFi:</strong>{' '}
-              <span className={
-                wifiInfo.on_gopro ? 'wifi-name--gopro' :
-                wifiInfo.network_type === 'internet' ? 'wifi-name--internet' :
-                'wifi-name--disconnected'
-              }>
-                {currentWiFi || 'Not connected'}
-              </span>
+      {!allCohn && (
+        <div className="card">
+          <h2>WiFi Status</h2>
+          <div className="wifi-status-box">
+            <div className="wifi-status-row">
+              <div>
+                <strong>Current WiFi:</strong>{' '}
+                <span className={
+                  wifiInfo.on_gopro ? 'wifi-name--gopro' :
+                  wifiInfo.network_type === 'internet' ? 'wifi-name--internet' :
+                  'wifi-name--disconnected'
+                }>
+                  {currentWiFi || 'Not connected'}
+                </span>
+              </div>
+              <button
+                className="btn btn-secondary btn-sm btn-refresh"
+                onClick={fetchCurrentWiFi}
+              >
+                Refresh
+              </button>
             </div>
-            <button
-              className="btn btn-secondary btn-sm btn-refresh"
-              onClick={fetchCurrentWiFi}
-            >
-              Refresh
-            </button>
+            {wifiInfo.network_type === 'internet' && (
+              <div className="wifi-hint--internet">
+                Connected to internet WiFi - ready to upload files
+              </div>
+            )}
+            {wifiInfo.on_gopro && (
+              <div className="wifi-hint--gopro">
+                Connected to GoPro WiFi - no internet access. Disconnect to upload files.
+              </div>
+            )}
           </div>
-          {wifiInfo.network_type === 'internet' && (
-            <div className="wifi-hint--internet">
-              Connected to internet WiFi - ready to upload files
-            </div>
-          )}
-          {wifiInfo.on_gopro && (
-            <div className="wifi-hint--gopro">
-              Connected to GoPro WiFi - no internet access. Disconnect to upload files.
-            </div>
-          )}
         </div>
-      </div>
+      )}
 
       {/* S3 Upload Configuration */}
       <div className="card">
-        <h2>S3 Upload Configuration</h2>
-        <div className="form-row">
-          <div className="form-group">
-            <label>Backend URL</label>
-            <input
-              type="text"
-              value={uploadConfig.backend_url}
-              onChange={(e) => setUploadConfig({ ...uploadConfig, backend_url: e.target.value })}
-              placeholder="https://your-backend.com/api/upload-file"
-            />
-          </div>
-          <div className="form-group">
-            <label>API Key</label>
-            <input
-              type="password"
-              value={uploadConfig.api_key}
-              onChange={(e) => setUploadConfig({ ...uploadConfig, api_key: e.target.value })}
-              placeholder="Your API key"
-            />
-          </div>
+        <div className="s3-header" onClick={() => setS3Expanded(!s3Expanded)} style={{ cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h2>Cloud Upload (S3)</h2>
+          <span style={{ color: '#888', fontSize: '0.85rem' }}>{s3Expanded ? '\u25BC' : '\u25B6'}</span>
         </div>
-        <button
-          className="btn btn-secondary btn-test-s3"
-          onClick={handleTestS3Backend}
-        >
-          🔍 Test S3 Backend Connection
-        </button>
+        {s3Expanded && (
+          <div>
+            <div className="form-row">
+              <div className="form-group">
+                <label>Backend URL</label>
+                <input
+                  type="text"
+                  value={uploadConfig.backend_url}
+                  onChange={(e) => setUploadConfig({ ...uploadConfig, backend_url: e.target.value })}
+                  placeholder="https://your-backend.com/api/upload-file"
+                />
+              </div>
+              <div className="form-group">
+                <label>API Key</label>
+                <input
+                  type="password"
+                  value={uploadConfig.api_key}
+                  onChange={(e) => setUploadConfig({ ...uploadConfig, api_key: e.target.value })}
+                  placeholder="Your API key"
+                />
+              </div>
+            </div>
+            <button
+              className="btn btn-secondary btn-test-s3"
+              onClick={handleTestS3Backend}
+            >
+              Test S3 Backend Connection
+            </button>
+          </div>
+        )}
       </div>
+
+      {/* Download by Take */}
+      {activeShoot && (
+        <div className="card take-download-section">
+          <h2>Download by Take — {activeShoot.name}</h2>
+          {activeShoot.takes && activeShoot.takes.filter(t => t.stopped_at).length > 0 ? (
+            <div className="take-download-list">
+              {activeShoot.takes.filter(t => t.stopped_at).reverse().map(take => (
+                <div key={take.take_number} className="take-download-item">
+                  <div className="take-download-info">
+                    <span className="take-download-number">Take {take.take_number}</span>
+                    {take.name && <span className="take-download-name">{take.name}</span>}
+                    <span className="take-download-cameras">{take.cameras?.length || 0} cameras</span>
+                  </div>
+                  <button
+                    className="btn btn-primary btn-sm"
+                    onClick={() => {
+                      setSelectedTakeIdx(String(activeShoot.takes.indexOf(take)));
+                      handleDownloadFromAllCameras();
+                    }}
+                    disabled={downloading}
+                  >
+                    Download Take {take.take_number}
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p style={{ color: 'var(--text-dimmed)', fontStyle: 'italic' }}>
+              No completed takes yet. Record from the Dashboard tab to create takes.
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Download Controls */}
       <div className="card">
@@ -1067,9 +1075,8 @@ function DownloadUpload({ cameras, apiUrl, downloadWsMessage, activeShoot }) {
               <strong>How it works:</strong>
               <ol className="how-it-works-list">
                 <li>Stop all recordings first (Recording Control tab)</li>
-                <li>Click "Enable WiFi on All Cameras" below (turns on WiFi AP via BLE)</li>
-                <li>Wait 20 seconds for WiFi to stabilize</li>
-                <li>Click "Download All Files" - this will automatically connect to that camera's WiFi and download files</li>
+                <li>Click "Download from All Cameras" — downloads happen in parallel via COHN (no WiFi switching needed)</li>
+                <li>If a camera lacks COHN credentials, enable WiFi first using the button below, then download individually</li>
               </ol>
             </div>
 
@@ -1133,14 +1140,16 @@ function DownloadUpload({ cameras, apiUrl, downloadWsMessage, activeShoot }) {
               </div>
             )}
 
-            <div className="button-group">
-              <button
-                className="btn btn-secondary"
-                onClick={handleEnableWiFi}
-              >
-                Step 1: Enable WiFi on All Cameras
-              </button>
-            </div>
+            {!allCohn && (
+              <div className="button-group">
+                <button
+                  className="btn btn-secondary"
+                  onClick={handleEnableWiFi}
+                >
+                  Enable WiFi on All Cameras (non-COHN fallback)
+                </button>
+              </div>
+            )}
 
             {/* Bulk Download Progress */}
             {bulkDownloadProgress && (
@@ -1192,11 +1201,11 @@ function DownloadUpload({ cameras, apiUrl, downloadWsMessage, activeShoot }) {
                     Downloading...
                   </>
                 ) : (
-                  `Step 2: Download from All ${connectedCameras.length} Cameras`
+                  `Download from All ${connectedCameras.length} Cameras`
                 )}
               </button>
               <small className="download-all-hint">
-                This will download {maxFiles ? `last ${maxFiles} files` : 'all files'} from each camera sequentially
+                Downloads {maxFiles ? `last ${maxFiles} files` : 'all files'} from all cameras in parallel via COHN
               </small>
             </div>
 
@@ -1329,14 +1338,6 @@ function DownloadUpload({ cameras, apiUrl, downloadWsMessage, activeShoot }) {
                         disabled={downloading || erasing === camera.serial}
                       >
                         {erasing === camera.serial ? 'Erasing...' : 'Erase SD'}
-                      </button>
-                      <button
-                        className="btn btn-secondary btn-sm btn-disconnect"
-                        onClick={() => handleDisconnectCamera(camera.serial)}
-                        disabled={downloading}
-                        title="Disconnect BLE"
-                      >
-                        Disconnect
                       </button>
                     </div>
                   )}
@@ -1595,15 +1596,13 @@ function DownloadUpload({ cameras, apiUrl, downloadWsMessage, activeShoot }) {
         <h2>Download & Upload Workflow</h2>
         <ol className="instructions-list">
           <li><strong>Stop all recordings</strong> - Go to Recording Control tab and stop recording</li>
-          <li><strong>Enable WiFi</strong> - Click "Step 1: Enable WiFi on All Cameras" and wait 20 seconds</li>
           <li><strong>Download files</strong> - Optionally specify number of files to download (e.g., 5 for last 5 files), then:
             <ul className="instructions-sublist">
-              <li><strong>Option A:</strong> Click "Step 2: Download from All Cameras" to download from all cameras sequentially (recommended)</li>
-              <li><strong>Option B:</strong> Click "Download Files" for individual cameras if you only need specific cameras</li>
-              <li>Your Mac will automatically connect to each camera's WiFi network</li>
+              <li><strong>COHN cameras (recommended):</strong> Click "Download from All Cameras" — downloads happen in parallel via HTTPS, no WiFi switching needed</li>
+              <li><strong>Non-COHN cameras:</strong> Click "Enable WiFi on All Cameras" first, wait 20 seconds, then download individually</li>
               <li>Files are downloaded in newest-first order (all files or limited to last N files)</li>
               <li>You'll see real-time progress showing which camera and which file is downloading</li>
-              <li>If one camera fails, the system continues to the next camera</li>
+              <li>If one camera fails, the others continue independently</li>
             </ul>
           </li>
           <li><strong>Upload to S3</strong> - Configure S3 settings at the top, then:

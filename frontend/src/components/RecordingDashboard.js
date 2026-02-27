@@ -15,6 +15,13 @@ function RecordingDashboard({ cameras, onCamerasUpdate, apiUrl, activeShoot, onS
   const [newShootName, setNewShootName] = useState('');
   const [creatingShoot, setCreatingShoot] = useState(false);
 
+  // Take management state
+  const [expandedTake, setExpandedTake] = useState(null); // take_number that's expanded
+  const [newTakeName, setNewTakeName] = useState('');
+  const [creatingTake, setCreatingTake] = useState(false);
+  const [editingTake, setEditingTake] = useState(null); // take_number being edited
+  const [editTakeName, setEditTakeName] = useState('');
+
   const connectedCameras = cameras.filter(cam => cam.connected);
   const recordingCameras = cameras.filter(cam => cam.recording);
   const isRecording = recordingCameras.length > 0;
@@ -112,6 +119,47 @@ function RecordingDashboard({ cameras, onCamerasUpdate, apiUrl, activeShoot, onS
       fetchShoots();
     } catch (error) {
       setMessage({ type: 'error', text: `Failed to delete shoot: ${error.response?.data?.detail || error.message}` });
+      setTimeout(() => setMessage(null), 5000);
+    }
+  };
+
+  const handleCreateManualTake = async () => {
+    if (!activeShoot) return;
+    setCreatingTake(true);
+    try {
+      await axios.post(`${apiUrl}/api/shoots/${activeShoot.id}/takes`, { name: newTakeName.trim() });
+      setNewTakeName('');
+      onShootUpdate();
+    } catch (error) {
+      setMessage({ type: 'error', text: `Failed to create take: ${error.response?.data?.detail || error.message}` });
+      setTimeout(() => setMessage(null), 5000);
+    } finally {
+      setCreatingTake(false);
+    }
+  };
+
+  const handleEditTakeName = async (takeNumber) => {
+    if (!activeShoot) return;
+    try {
+      await axios.patch(`${apiUrl}/api/shoots/${activeShoot.id}/takes/${takeNumber}`, { name: editTakeName });
+      setEditingTake(null);
+      setEditTakeName('');
+      onShootUpdate();
+    } catch (error) {
+      setMessage({ type: 'error', text: `Failed to update take: ${error.response?.data?.detail || error.message}` });
+      setTimeout(() => setMessage(null), 5000);
+    }
+  };
+
+  const handleDeleteTake = async (takeNumber) => {
+    if (!activeShoot) return;
+    if (!window.confirm(`Delete Take ${takeNumber}? This cannot be undone.`)) return;
+    try {
+      await axios.delete(`${apiUrl}/api/shoots/${activeShoot.id}/takes/${takeNumber}`);
+      setExpandedTake(null);
+      onShootUpdate();
+    } catch (error) {
+      setMessage({ type: 'error', text: `Failed to delete take: ${error.response?.data?.detail || error.message}` });
       setTimeout(() => setMessage(null), 5000);
     }
   };
@@ -329,6 +377,7 @@ function RecordingDashboard({ cameras, onCamerasUpdate, apiUrl, activeShoot, onS
               </select>
             )}
           </div>
+          <p className="shoot-hint">Create or select a shoot to organize recordings into takes.</p>
         </div>
       )}
 
@@ -441,23 +490,123 @@ function RecordingDashboard({ cameras, onCamerasUpdate, apiUrl, activeShoot, onS
         )}
       </div>
 
-      {/* Take History (when shoot active) */}
-      {activeShoot && activeShoot.takes && activeShoot.takes.length > 0 && (
-        <div className="card">
-          <h3 style={{ marginBottom: '0.75rem', color: '#888', fontSize: '0.85rem', textTransform: 'uppercase', letterSpacing: '1px' }}>Take History</h3>
-          <div className="take-list">
-            {[...activeShoot.takes].reverse().map((take) => (
-              <div key={take.take_number} className={`take-item ${!take.stopped_at ? 'take-active' : ''}`}>
-                <div className="take-item-header">
-                  <span className="take-number">Take {take.take_number}</span>
-                  <span className="take-cameras">{take.cameras?.length || 0} cam{(take.cameras?.length || 0) !== 1 ? 's' : ''}</span>
-                </div>
-                <div className="take-item-status">
-                  {!take.stopped_at ? 'Recording...' : 'Completed'}
-                </div>
-              </div>
-            ))}
+      {/* Take Management (when shoot active) */}
+      {activeShoot && (
+        <div className="card take-management-card">
+          <div className="take-management-header">
+            <h3>Take History</h3>
+            <button
+              className="btn btn-primary btn-sm"
+              onClick={() => setCreatingTake(prev => !prev)}
+              disabled={isRecording}
+            >
+              {creatingTake ? 'Cancel' : '+ New Take'}
+            </button>
           </div>
+
+          {/* Create Manual Take Form */}
+          {creatingTake && (
+            <div className="new-take-form">
+              <input
+                type="text"
+                placeholder="Take name (e.g., Wide Shot)"
+                value={newTakeName}
+                onChange={(e) => setNewTakeName(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleCreateManualTake()}
+                className="take-name-input"
+              />
+              <button
+                className="btn btn-success btn-sm"
+                onClick={handleCreateManualTake}
+                disabled={!newTakeName.trim()}
+              >
+                Create Take
+              </button>
+            </div>
+          )}
+
+          {activeShoot.takes && activeShoot.takes.length > 0 ? (
+            <div className="take-list">
+              {[...activeShoot.takes].reverse().map((take) => (
+                <div key={take.take_number} className={`take-item ${!take.stopped_at ? 'take-active' : ''} ${expandedTake === take.take_number ? 'take-expanded' : ''}`}>
+                  <div className="take-item-header" onClick={() => setExpandedTake(expandedTake === take.take_number ? null : take.take_number)}>
+                    <div className="take-item-left">
+                      <span className="take-number">Take {take.take_number}</span>
+                      {take.name && <span className="take-name-label">{take.name}</span>}
+                      <span className="take-cameras">{take.cameras?.length || 0} cam{(take.cameras?.length || 0) !== 1 ? 's' : ''}</span>
+                    </div>
+                    <div className="take-item-right">
+                      <span className="take-item-status">
+                        {!take.stopped_at ? 'Recording...' : take.manual ? 'Manual' : 'Completed'}
+                      </span>
+                      <span className="take-expand-icon">{expandedTake === take.take_number ? '\u25BC' : '\u25B6'}</span>
+                    </div>
+                  </div>
+
+                  {expandedTake === take.take_number && (
+                    <div className="take-detail">
+                      {/* Edit Name */}
+                      <div className="take-detail-row">
+                        {editingTake === take.take_number ? (
+                          <div className="take-edit-name">
+                            <input
+                              type="text"
+                              value={editTakeName}
+                              onChange={(e) => setEditTakeName(e.target.value)}
+                              onKeyDown={(e) => e.key === 'Enter' && handleEditTakeName(take.take_number)}
+                              className="take-name-input"
+                              placeholder="Take name"
+                              autoFocus
+                            />
+                            <button className="btn btn-success btn-sm" onClick={() => handleEditTakeName(take.take_number)}>Save</button>
+                            <button className="btn btn-secondary btn-sm" onClick={() => { setEditingTake(null); setEditTakeName(''); }}>Cancel</button>
+                          </div>
+                        ) : (
+                          <button
+                            className="btn btn-secondary btn-sm"
+                            onClick={() => { setEditingTake(take.take_number); setEditTakeName(take.name || ''); }}
+                          >
+                            {take.name ? 'Rename' : 'Add Name'}
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Camera list */}
+                      {take.cameras && take.cameras.length > 0 && (
+                        <div className="take-detail-cameras">
+                          <span className="take-detail-label">Cameras:</span>
+                          {take.cameras.map(serial => (
+                            <span key={serial} className="take-camera-chip">{cameras.find(c => c.serial === serial)?.name || `GoPro ${serial}`}</span>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Timestamps */}
+                      <div className="take-detail-times">
+                        {take.started_at && <span className="take-time">Started: {new Date(take.started_at).toLocaleTimeString()}</span>}
+                        {take.stopped_at && <span className="take-time">Stopped: {new Date(take.stopped_at).toLocaleTimeString()}</span>}
+                      </div>
+
+                      {/* Delete */}
+                      <div className="take-detail-row">
+                        <button
+                          className="btn btn-danger btn-sm"
+                          onClick={() => handleDeleteTake(take.take_number)}
+                          disabled={!take.stopped_at}
+                        >
+                          Delete Take
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="empty-state" style={{ padding: '1.5rem' }}>
+              <p>No takes yet. Start recording or create a manual take.</p>
+            </div>
+          )}
         </div>
       )}
     </div>

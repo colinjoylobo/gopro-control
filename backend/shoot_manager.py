@@ -158,6 +158,87 @@ class ShootManager:
             return True
         return False
 
+    def create_manual_take(self, shoot_id: str, name: str = "", files: list = None) -> Optional[dict]:
+        """Create a manual take (not from recording) on a specific shoot"""
+        shoot = None
+        for s in self.data["shoots"]:
+            if s["id"] == shoot_id:
+                shoot = s
+                break
+        if not shoot:
+            return None
+
+        shoot["current_take_number"] += 1
+        take = {
+            "take_number": shoot["current_take_number"],
+            "name": name,
+            "started_at": datetime.now().isoformat(),
+            "stopped_at": datetime.now().isoformat(),
+            "cameras": [],
+            "files": files or [],
+            "manual": True,
+            "downloaded": False
+        }
+        shoot["takes"].append(take)
+        self._save()
+        logger.info(f"Created manual Take {take['take_number']} on shoot '{shoot['name']}': {name}")
+        return take
+
+    def update_take(self, shoot_id: str, take_number: int, updates: dict) -> Optional[dict]:
+        """Update a take's name or files"""
+        shoot = None
+        for s in self.data["shoots"]:
+            if s["id"] == shoot_id:
+                shoot = s
+                break
+        if not shoot:
+            return None
+
+        for take in shoot["takes"]:
+            if take["take_number"] == take_number:
+                if "name" in updates:
+                    take["name"] = updates["name"]
+                if "files" in updates:
+                    take["files"] = updates["files"]
+                self._save()
+                logger.info(f"Updated Take {take_number} on shoot '{shoot['name']}'")
+                return take
+        return None
+
+    def get_take_files(self, shoot_id: str, take_number: int) -> Optional[dict]:
+        """Get files and details for a specific take"""
+        shoot = None
+        for s in self.data["shoots"]:
+            if s["id"] == shoot_id:
+                shoot = s
+                break
+        if not shoot:
+            return None
+
+        for take in shoot["takes"]:
+            if take["take_number"] == take_number:
+                return take
+        return None
+
+    def delete_take(self, shoot_id: str, take_number: int) -> bool:
+        """Delete a take from a shoot by take number"""
+        shoot = None
+        for s in self.data["shoots"]:
+            if s["id"] == shoot_id:
+                shoot = s
+                break
+        if not shoot:
+            return False
+
+        original_len = len(shoot["takes"])
+        shoot["takes"] = [t for t in shoot["takes"] if t["take_number"] != take_number]
+
+        if len(shoot["takes"]) < original_len:
+            self._save()
+            logger.info(f"Deleted Take {take_number} from shoot '{shoot['name']}'")
+            return True
+        return False
+
     def get_download_path(self, shoot_name: str, take_number: int, serial: str) -> str:
         """Return sanitized relative path: Shoot_Name/Take_01/GoPro8881"""
         safe_name = self._sanitize_filename(shoot_name)

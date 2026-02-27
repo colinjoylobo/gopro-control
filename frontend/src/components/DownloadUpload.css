@@ -652,6 +652,76 @@
   }
 }
 
+/* ============== Take Download Section ============== */
+.take-download-section {
+  margin-bottom: var(--space-xl);
+}
+
+.take-download-section h3 {
+  margin: 0 0 var(--space-lg) 0;
+  color: var(--text-primary);
+  font-size: 1.1rem;
+}
+
+.take-download-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.take-download-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--space-md) var(--space-lg);
+  background: var(--bg-base);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  transition: border-color 0.2s;
+}
+
+.take-download-item:hover {
+  border-color: var(--accent);
+}
+
+.take-download-info {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+}
+
+.take-download-number {
+  font-weight: 700;
+  color: var(--text-primary);
+  font-size: 0.9rem;
+}
+
+.take-download-name {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-style: italic;
+}
+
+.take-download-cameras {
+  font-size: 0.78rem;
+  color: var(--text-dimmed);
+  padding: 0.15rem 0.5rem;
+  background: rgba(102, 126, 234, 0.1);
+  border-radius: var(--radius-pill);
+}
+
+/* ============== S3 Collapse Header ============== */
+.s3-header {
+  padding: var(--space-md) 0;
+  font-weight: 600;
+  color: var(--text-primary);
+  user-select: none;
+}
+
+.s3-header:hover {
+  color: var(--accent);
+}
+
 /* ============== Download Card Actions ============== */
 
 .download-card-actions {

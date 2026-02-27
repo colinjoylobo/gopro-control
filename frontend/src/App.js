@@ -59,6 +59,7 @@ function App() {
     switch (data.type) {
       case 'camera_added':
       case 'camera_removed':
+      case 'camera_updated':
         fetchCameras();
         break;
       case 'camera_connection':
@@ -120,6 +121,7 @@ function App() {
         break;
       case 'take_started':
       case 'take_stopped':
+      case 'take_deleted':
         fetchActiveShoot();
         break;
       case 'cohn_camera_online':
@@ -270,6 +272,7 @@ function App() {
             cameras={cameras}
             onCamerasUpdate={fetchCameras}
             apiUrl={API_URL}
+            cohnStatus={cohnStatus}
           />
         )}
         {activeTab === 'recording' && (
@@ -296,6 +299,7 @@ function App() {
             apiUrl={API_URL}
             downloadWsMessage={downloadWsMessage}
             activeShoot={activeShoot}
+            cohnStatus={cohnStatus}
           />
         )}
       </div>

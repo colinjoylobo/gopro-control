@@ -5,6 +5,7 @@ import asyncio
 import threading
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, List, Optional
 from open_gopro import GoPro, Params
 from open_gopro.constants import StatusId, SettingId
@@ -656,6 +657,33 @@ class CameraManager:
             return False
         self.cameras[serial] = CameraInstance(serial, wifi_ssid, wifi_password, name)
         return True
+
+    def update_camera_name(self, serial: str, name: str) -> bool:
+        """Update a camera's display name and persist to saved_cameras.json"""
+        if serial not in self.cameras:
+            return False
+        self.cameras[serial].name = name
+        self._save_to_json()
+        return True
+
+    def _save_to_json(self):
+        """Persist current camera list to saved_cameras.json"""
+        import json
+        saved_cameras_file = Path(__file__).parent.parent.parent / "saved_cameras.json"
+        try:
+            cameras_data = []
+            for serial, cam in self.cameras.items():
+                cameras_data.append({
+                    "serial": cam.serial,
+                    "name": cam.name,
+                    "wifi_ssid": cam.wifi_ssid,
+                    "wifi_password": cam.wifi_password,
+                })
+            with open(saved_cameras_file, 'w') as f:
+                json.dump({"cameras": cameras_data}, f, indent=2)
+            logger.info(f"Saved {len(cameras_data)} camera(s) to saved_cameras.json")
+        except Exception as e:
+            logger.error(f"Failed to save cameras to JSON: {e}")
 
     async def remove_camera(self, serial: str) -> bool:
         if serial in self.cameras:

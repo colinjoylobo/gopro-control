@@ -233,6 +233,61 @@
   color: var(--danger);
 }
 
+/* Transport Indicator */
+.transport-indicator {
+  display: inline-block;
+  padding: 0.2rem 0.6rem;
+  border-radius: var(--radius-pill);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  margin-left: var(--space-sm);
+  vertical-align: middle;
+}
+
+.transport-indicator.cohn {
+  background: rgba(16, 185, 129, 0.15);
+  color: var(--success);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.transport-indicator.ble {
+  background: rgba(102, 126, 234, 0.12);
+  color: var(--accent);
+  border: 1px solid rgba(102, 126, 234, 0.3);
+}
+
+/* Apply Target Selector */
+.apply-target-select {
+  padding: var(--space-sm) var(--space-md);
+  background: var(--bg-base);
+  border: 2px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.apply-target-select:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+/* GPS Toggle Row */
+.gps-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  margin-top: var(--space-md);
+  padding: var(--space-sm) 0;
+}
+
+.gps-toggle-row .gps-label {
+  font-size: 0.85rem;
+  color: var(--text-dimmed);
+  font-weight: 500;
+}
+
 /* Responsive */
 @media (max-width: 768px) {
   .preset-select-row {
