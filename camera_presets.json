@@ -1,0 +1,26 @@
+{
+  "Cinema 4K": {
+    "resolution": "RES_4K",
+    "fps": "FPS_24",
+    "video_fov": "LINEAR",
+    "hypersmooth": "HIGH",
+    "anti_flicker": "HZ_60",
+    "created_at": "2026-02-24T18:23:48.994156"
+  },
+  "Standard 4K": {
+    "resolution": "4K",
+    "fps": "24",
+    "video_fov": "Wide",
+    "hypersmooth": "Off",
+    "anti_flicker": "PAL",
+    "created_at": "2026-02-25T16:53:23.369649"
+  },
+  "Preset 1": {
+    "resolution": "4K",
+    "fps": "60",
+    "video_fov": "Linear",
+    "hypersmooth": "Off",
+    "anti_flicker": "60Hz",
+    "created_at": "2026-02-25T17:12:16.925367"
+  }
+}

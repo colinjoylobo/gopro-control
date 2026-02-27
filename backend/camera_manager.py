@@ -662,7 +662,7 @@ class CameraManager:
     def _save_to_json(self):
         """Persist current camera list to saved_cameras.json"""
         import json
-        saved_cameras_file = Path(__file__).parent.parent.parent / "saved_cameras.json"
+        saved_cameras_file = Path(__file__).parent.parent / "saved_cameras.json"
         try:
             cameras_data = []
             for serial, cam in self.cameras.items():

@@ -373,7 +373,7 @@ async def load_saved_cameras():
     import json
     from pathlib import Path
 
-    saved_cameras_file = Path(__file__).parent.parent.parent / "saved_cameras.json"
+    saved_cameras_file = Path(__file__).parent.parent / "saved_cameras.json"
 
     if saved_cameras_file.exists():
         try:

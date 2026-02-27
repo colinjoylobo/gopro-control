@@ -12,7 +12,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-SHOOTS_FILE = Path(__file__).parent.parent.parent / "shoots.json"
+SHOOTS_FILE = Path(__file__).parent.parent / "shoots.json"
 
 
 class ShootManager:

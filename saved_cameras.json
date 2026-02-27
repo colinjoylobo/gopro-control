@@ -1,0 +1,52 @@
+{
+  "cameras": [
+    {
+      "serial": "50832152",
+      "name": "GoPro 50832152_8",
+      "wifi_ssid": "GP50832152",
+      "wifi_password": "PwS-xPP-Mhj"
+    },
+    {
+      "serial": "25468881",
+      "name": "GoPro 25468881",
+      "wifi_ssid": "GP25468881",
+      "wifi_password": "2PN-bm3-rRN"
+    },
+    {
+      "serial": "25707904",
+      "name": "GoPro 25707904_1",
+      "wifi_ssid": "GP25707904",
+      "wifi_password": "GFW-s3Y-Xfy"
+    },
+    {
+      "serial": "25464218",
+      "name": "GoPro 25464218_7",
+      "wifi_ssid": "GP25464218",
+      "wifi_password": "Frd-Xgb-8nk"
+    },
+    {
+      "serial": "25471874",
+      "name": "GoPro 25471874_4",
+      "wifi_ssid": "GP25471874",
+      "wifi_password": "GwS-HYx-mR9"
+    },
+    {
+      "serial": "25701450",
+      "name": "GoPro 25701450",
+      "wifi_ssid": "GP25701450",
+      "wifi_password": "67d-BBg-djg"
+    },
+    {
+      "serial": "25698803",
+      "name": "GoPro 25698803_6",
+      "wifi_ssid": "GP25698803",
+      "wifi_password": "bBG-PZt-Vy4"
+    },
+    {
+      "serial": "25707897",
+      "name": "GoPro 25707897_5",
+      "wifi_ssid": "GP25707897",
+      "wifi_password": "J>8-4wY-mF3"
+    }
+  ]
+}

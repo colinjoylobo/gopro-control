@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 class PresetManager:
-    PRESETS_FILE = Path(__file__).parent.parent.parent / "camera_presets.json"
+    PRESETS_FILE = Path(__file__).parent.parent / "camera_presets.json"
 
     def __init__(self):
         self.presets: Dict[str, dict] = {}

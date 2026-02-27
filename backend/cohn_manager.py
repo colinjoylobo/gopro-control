@@ -32,7 +32,7 @@ CM_NET_MGMT = "b5f90091-aa8d-11e3-9046-0002a5d5c51b"
 CM_NET_MGMT_RESP = "b5f90092-aa8d-11e3-9046-0002a5d5c51b"
 
 # Credentials file path
-CREDENTIALS_FILE = Path(__file__).parent.parent.parent / "cohn_credentials.json"
+CREDENTIALS_FILE = Path(__file__).parent.parent / "cohn_credentials.json"
 
 # Temp cert directory
 CERT_DIR = Path(tempfile.gettempdir()) / "gopro_cohn_certs"
