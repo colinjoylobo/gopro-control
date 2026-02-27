@@ -241,14 +241,39 @@ async def connection_monitor():
                 if health_poll_counter >= 30:
                     health_poll_counter = 0
                     try:
+                        # 1) BLE health for BLE-connected cameras
                         health_data = await camera_manager.get_all_health()
+
+                        # 2) COHN health for network-connected cameras (fills gaps BLE can't reach)
+                        if cohn_manager.credentials:
+                            all_creds = cohn_manager.get_all_credentials()
+                            for serial, creds in all_creds.items():
+                                # Skip if BLE already gave us good data (has battery + storage)
+                                ble_health = health_data.get(serial, {})
+                                if ble_health.get("battery_percent") is not None and ble_health.get("storage_remaining_kb") is not None:
+                                    continue
+                                ip = creds.get("ip_address")
+                                if not ip:
+                                    continue
+                                auth = cohn_manager.get_auth_header(serial)
+                                try:
+                                    state = await _cohn_get_state(ip, auth)
+                                    if "error" not in state:
+                                        cam_name = ble_health.get("name") or serial
+                                        cohn_health = _parse_cohn_state_to_health(serial, cam_name, state)
+                                        health_data[serial] = cohn_health
+                                        logger.debug(f"[{serial}] COHN health: batt={cohn_health.get('battery_percent')}% storage={cohn_health.get('storage_remaining_kb')}KB")
+                                except Exception as e:
+                                    logger.debug(f"[{serial}] COHN health query failed: {e}")
+
                         _cached_health_data.update(health_data)
-                        # Log storage values for debugging
+                        # Log health values for debugging
                         for serial, hd in health_data.items():
                             storage = hd.get("storage_remaining_kb")
                             battery = hd.get("battery_percent")
                             if storage is not None or battery is not None:
-                                logger.info(f"[{serial}] Health: battery={battery}%, storage={storage}KB")
+                                src = hd.get("source", "ble")
+                                logger.info(f"[{serial}] Health ({src}): battery={battery}%, storage={storage}KB")
                         if websocket_connections:
                             await broadcast_message({
                                 "type": "health_update",
@@ -2636,7 +2661,7 @@ def _ffmpeg_reader_thread(serial: str, proc: subprocess.Popen):
     logger.info(f"[COHN {serial}] Reader thread started")
     while True:
         try:
-            data = proc.stdout.read(8192)
+            data = proc.stdout.read(32768)
         except (OSError, ValueError):
             break
         if not data:
@@ -2645,10 +2670,14 @@ def _ffmpeg_reader_thread(serial: str, proc: subprocess.Popen):
             try:
                 q.put_nowait(data)
             except queue.Full:
-                try:
-                    q.get_nowait()
-                except queue.Empty:
-                    pass
+                # Drain stale data to make room (drop oldest to keep stream fresh)
+                dropped = 0
+                while dropped < 50:
+                    try:
+                        q.get_nowait()
+                        dropped += 1
+                    except queue.Empty:
+                        break
                 try:
                     q.put_nowait(data)
                 except queue.Full:
@@ -2674,9 +2703,9 @@ def _start_transcoder(serial: str) -> bool:
         "-preset", "ultrafast",
         "-tune", "zerolatency",
         "-b:v", "2M",
-        "-maxrate", "2M",
-        "-bufsize", "1M",
-        "-g", "30",
+        "-maxrate", "2.5M",
+        "-bufsize", "4M",
+        "-g", "15",
         "-an",
         "-f", "mpegts",
         "pipe:1"
@@ -3022,7 +3051,7 @@ async def stream_cohn_ts(serial: str):
     if serial not in _cohn_stream_clients:
         raise HTTPException(status_code=404, detail="Camera not streaming")
 
-    client_queue: queue.Queue = queue.Queue(maxsize=3000)
+    client_queue: queue.Queue = queue.Queue(maxsize=10000)
     _cohn_stream_clients[serial].append(client_queue)
     logger.info(f"[COHN {serial}] Browser client connected to stream")
 

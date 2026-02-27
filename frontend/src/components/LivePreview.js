@@ -34,6 +34,11 @@ function LivePreview({ cameras, apiUrl, cohnStatus, onCohnUpdate, subscribeWsMes
   });
   const [isFullscreen, setIsFullscreen] = useState(false);
 
+  // === Snapshot state ===
+  const [showSnapshots, setShowSnapshots] = useState(false);
+  const [snapshots, setSnapshots] = useState({}); // {serial: dataURL}
+  const [capturingSnapshots, setCapturingSnapshots] = useState(false);
+
   // === COHN state ===
   const [cohnCameras, setCohnCameras] = useState({}); // {serial: {streaming, streamUrl}}
   const [wifiSSID, setWifiSSID] = useState(() => localStorage.getItem('gopro_cohn_ssid') || '');
@@ -315,11 +320,13 @@ function LivePreview({ cameras, apiUrl, cohnStatus, onCohnUpdate, subscribeWsMes
           }, {
             enableWorker: true,
             liveBufferLatencyChasing: true,
-            liveBufferLatencyMaxLatency: 1.5,
-            liveBufferLatencyMinRemain: 0.3,
+            liveBufferLatencyMaxLatency: 3.0,
+            liveBufferLatencyMinRemain: 0.8,
             autoCleanupSourceBuffer: true,
-            autoCleanupMaxBackwardDuration: 5,
-            autoCleanupMinBackwardDuration: 3,
+            autoCleanupMaxBackwardDuration: 10,
+            autoCleanupMinBackwardDuration: 5,
+            fixAudioTimestampGap: false,
+            stashInitialSize: 65536,
           });
           player.attachMediaElement(videoEl);
           player.load();
@@ -612,6 +619,89 @@ function LivePreview({ cameras, apiUrl, cohnStatus, onCohnUpdate, subscribeWsMes
   const unprovisionedCount = cameras.length - provisionedCount;
   const streamingCount = Object.values(cohnCameras).filter(c => c.streaming).length;
 
+  // === Snapshot Capture ===
+  const captureAllSnapshots = useCallback(() => {
+    setCapturingSnapshots(true);
+    const snaps = {};
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+
+    cameras.forEach((camera) => {
+      const videoEl = videoRefsMap.current[camera.serial];
+      if (videoEl && videoEl.videoWidth > 0 && videoEl.videoHeight > 0) {
+        canvas.width = videoEl.videoWidth;
+        canvas.height = videoEl.videoHeight;
+        ctx.drawImage(videoEl, 0, 0);
+        try {
+          snaps[camera.serial] = {
+            dataUrl: canvas.toDataURL('image/jpeg', 0.92),
+            name: camera.name || `GoPro ${camera.serial}`,
+            serial: camera.serial,
+            width: videoEl.videoWidth,
+            height: videoEl.videoHeight,
+            timestamp: new Date().toLocaleTimeString(),
+          };
+        } catch (e) {
+          console.error(`Snapshot failed for ${camera.serial}:`, e);
+        }
+      }
+    });
+
+    setSnapshots(snaps);
+    setShowSnapshots(true);
+    setCapturingSnapshots(false);
+
+    if (Object.keys(snaps).length === 0) {
+      setMessage({ type: 'error', text: 'No active streams to capture. Start previews first.' });
+      setTimeout(() => setMessage(null), 5000);
+      setShowSnapshots(false);
+    }
+  }, [cameras]);
+
+  const downloadSnapshotGrid = useCallback(() => {
+    const snapsArr = Object.values(snapshots);
+    if (snapsArr.length === 0) return;
+
+    const cols = snapsArr.length <= 2 ? snapsArr.length : snapsArr.length % 2 === 0 ? 2 : 3;
+    const rows = Math.ceil(snapsArr.length / cols);
+    const thumbW = 640;
+    const thumbH = 360;
+    const labelH = 30;
+    const padding = 8;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = cols * (thumbW + padding) + padding;
+    canvas.height = rows * (thumbH + labelH + padding) + padding;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#1a1a2e';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    let loaded = 0;
+    snapsArr.forEach((snap, idx) => {
+      const img = new Image();
+      img.onload = () => {
+        const col = idx % cols;
+        const row = Math.floor(idx / cols);
+        const x = padding + col * (thumbW + padding);
+        const y = padding + row * (thumbH + labelH + padding);
+        ctx.drawImage(img, x, y, thumbW, thumbH);
+        ctx.fillStyle = 'rgba(0,0,0,0.6)';
+        ctx.fillRect(x, y + thumbH, thumbW, labelH);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '14px monospace';
+        ctx.fillText(`${snap.name} (${snap.serial}) - ${snap.timestamp}`, x + 8, y + thumbH + 20);
+        loaded++;
+        if (loaded === snapsArr.length) {
+          const link = document.createElement('a');
+          link.download = `gopro-snapshots-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.jpg`;
+          link.href = canvas.toDataURL('image/jpeg', 0.95);
+          link.click();
+        }
+      };
+      img.src = snap.dataUrl;
+    });
+  }, [snapshots]);
+
   // === Render ===
 
   const renderInfoCard = (camera, onPreviewClick) => {
@@ -895,6 +985,14 @@ function LivePreview({ cameras, apiUrl, cohnStatus, onCohnUpdate, subscribeWsMes
                 <button className="btn btn-danger btn-sm" onClick={stopAllPreviews} disabled={streamingCount === 0}>
                   Stop All
                 </button>
+                <button
+                  className="btn btn-secondary btn-sm"
+                  onClick={captureAllSnapshots}
+                  disabled={streamingCount === 0 || capturingSnapshots}
+                  title="Capture still frames from all streaming cameras"
+                >
+                  {capturingSnapshots ? 'Capturing...' : 'Snapshot Grid'}
+                </button>
               </div>
             </div>
           )}
@@ -1102,6 +1200,39 @@ function LivePreview({ cameras, apiUrl, cohnStatus, onCohnUpdate, subscribeWsMes
               })}
             </div>
           )}
+        </div>
+      )}
+      {/* Snapshot Grid Modal */}
+      {showSnapshots && (
+        <div className="snapshot-modal-overlay" onClick={() => setShowSnapshots(false)}>
+          <div className="snapshot-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="snapshot-modal-header">
+              <h2>Camera Snapshots</h2>
+              <div className="snapshot-modal-actions">
+                <button className="btn btn-primary btn-sm" onClick={downloadSnapshotGrid}>
+                  Download Grid
+                </button>
+                <button className="btn btn-secondary btn-sm" onClick={captureAllSnapshots}>
+                  Refresh
+                </button>
+                <button className="btn btn-secondary btn-sm" onClick={() => setShowSnapshots(false)}>
+                  Close
+                </button>
+              </div>
+            </div>
+            <div className={`snapshot-grid ${Object.keys(snapshots).length % 2 === 0 ? 'snap-2col' : 'snap-3col'}`}>
+              {Object.values(snapshots).map((snap) => (
+                <div key={snap.serial} className="snapshot-item">
+                  <img src={snap.dataUrl} alt={snap.name} className="snapshot-img" />
+                  <div className="snapshot-label">
+                    <span className="snapshot-name">{snap.name}</span>
+                    <span className="snapshot-serial">{snap.serial}</span>
+                    <span className="snapshot-time">{snap.timestamp}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       )}
     </div>

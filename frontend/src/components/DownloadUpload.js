@@ -34,6 +34,20 @@ function DownloadUpload({ cameras, apiUrl, downloadWsMessage, activeShoot, cohnS
   const [bulkEraseProgress, setBulkEraseProgress] = useState(null); // { current, total, serial }
   const [s3Expanded, setS3Expanded] = useState(() => localStorage.getItem('gopro_s3_expanded') === 'true');
 
+  // Grid layout: 'auto' = smart (2 cols even, 3 cols odd), '2col', '3col'
+  const [gridLayout, setGridLayout] = useState(() => localStorage.getItem('download_grid_layout') || 'auto');
+
+  const handleGridLayout = (layout) => {
+    setGridLayout(layout);
+    localStorage.setItem('download_grid_layout', layout);
+  };
+
+  const getGridClass = () => {
+    if (gridLayout === '2col') return 'grid-2col';
+    if (gridLayout === '3col') return 'grid-3col';
+    return cameras.length % 2 === 0 ? 'grid-2col' : 'grid-3col';
+  };
+
   const connectedCameras = cameras.filter(cam => cam.connected);
   const sortedCameras = [...cameras].sort((a, b) => {
     if (a.connected && !b.connected) return -1;
@@ -1274,7 +1288,13 @@ function DownloadUpload({ cameras, apiUrl, downloadWsMessage, activeShoot, cohnS
               <strong>OR</strong> download from individual cameras below
             </div>
 
-            <div className="cameras-download-grid">
+            <div className="grid-layout-bar">
+              <span className="layout-label">Layout</span>
+              <button className={`layout-btn ${gridLayout === 'auto' ? 'active' : ''}`} onClick={() => handleGridLayout('auto')}>Auto</button>
+              <button className={`layout-btn ${gridLayout === '2col' ? 'active' : ''}`} onClick={() => handleGridLayout('2col')}>2-Col</button>
+              <button className={`layout-btn ${gridLayout === '3col' ? 'active' : ''}`} onClick={() => handleGridLayout('3col')}>3-Col</button>
+            </div>
+            <div className={`cameras-download-grid ${getGridClass()}`}>
               {sortedCameras.map((camera) => (
                 <div key={camera.serial} className={`download-card ${!camera.connected ? 'download-card-disconnected' : ''}`}>
                   <div className="download-card-header">

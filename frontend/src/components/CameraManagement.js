@@ -13,6 +13,20 @@ function CameraManagement({ cameras, onCamerasUpdate, apiUrl, cohnStatus }) {
   const [editingName, setEditingName] = useState(null);
   const [editNameValue, setEditNameValue] = useState('');
 
+  // Grid layout: 'auto' = smart (2 cols even, 3 cols odd), '2col', '3col'
+  const [gridLayout, setGridLayout] = useState(() => localStorage.getItem('cameras_grid_layout') || 'auto');
+
+  const handleGridLayout = (layout) => {
+    setGridLayout(layout);
+    localStorage.setItem('cameras_grid_layout', layout);
+  };
+
+  const getGridClass = () => {
+    if (gridLayout === '2col') return 'grid-2col';
+    if (gridLayout === '3col') return 'grid-3col';
+    return cameras.length % 2 === 0 ? 'grid-2col' : 'grid-3col';
+  };
+
   // Battery comes from camera props (updated via App.js WebSocket + polling)
   const getBatteryColor = (level) => {
     if (level === null || level === undefined) return '#999';
@@ -375,7 +389,14 @@ function CameraManagement({ cameras, onCamerasUpdate, apiUrl, cohnStatus }) {
             <p>No cameras added yet. Click "Add Camera" or "Auto-Discover" to get started.</p>
           </div>
         ) : (
-          <div className="cameras-grid">
+          <>
+          <div className="grid-layout-bar">
+            <span className="layout-label">Layout</span>
+            <button className={`layout-btn ${gridLayout === 'auto' ? 'active' : ''}`} onClick={() => handleGridLayout('auto')}>Auto</button>
+            <button className={`layout-btn ${gridLayout === '2col' ? 'active' : ''}`} onClick={() => handleGridLayout('2col')}>2-Col</button>
+            <button className={`layout-btn ${gridLayout === '3col' ? 'active' : ''}`} onClick={() => handleGridLayout('3col')}>3-Col</button>
+          </div>
+          <div className={`cameras-grid ${getGridClass()}`}>
             {[...cameras].sort((a, b) => {
               if (a.connected && !b.connected) return -1;
               if (!a.connected && b.connected) return 1;
@@ -474,6 +495,7 @@ function CameraManagement({ cameras, onCamerasUpdate, apiUrl, cohnStatus }) {
               </div>
             ))}
           </div>
+          </>
         )}
       </div>
 

@@ -1375,3 +1375,107 @@ select.wifi-input {
     grid-template-columns: repeat(2, 1fr);
   }
 }
+
+/* ============== Snapshot Grid Modal ============== */
+.snapshot-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.85);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+}
+
+.snapshot-modal {
+  background: var(--bg-base);
+  border: 2px solid var(--border-default);
+  border-radius: var(--radius-xl);
+  width: 95vw;
+  max-height: 90vh;
+  overflow-y: auto;
+  padding: var(--space-xl);
+}
+
+.snapshot-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-lg);
+}
+
+.snapshot-modal-header h2 {
+  margin: 0;
+  font-size: 1.3rem;
+}
+
+.snapshot-modal-actions {
+  display: flex;
+  gap: var(--space-sm);
+}
+
+.snapshot-grid {
+  display: grid;
+  gap: var(--space-md);
+}
+
+.snapshot-grid.snap-2col {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.snapshot-grid.snap-3col {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.snapshot-item {
+  position: relative;
+  border: 2px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: #000;
+}
+
+.snapshot-img {
+  width: 100%;
+  display: block;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+}
+
+.snapshot-label {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.85));
+  padding: 1.5rem 0.75rem 0.5rem;
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.snapshot-name {
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: #fff;
+}
+
+.snapshot-serial {
+  font-size: 0.7rem;
+  color: rgba(255, 255, 255, 0.6);
+  font-family: monospace;
+}
+
+.snapshot-time {
+  margin-left: auto;
+  font-size: 0.7rem;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+@media (max-width: 768px) {
+  .snapshot-grid.snap-2col,
+  .snapshot-grid.snap-3col {
+    grid-template-columns: 1fr;
+  }
+}

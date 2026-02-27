@@ -22,9 +22,24 @@ function RecordingDashboard({ cameras, onCamerasUpdate, apiUrl, activeShoot, onS
   const [editingTake, setEditingTake] = useState(null); // take_number being edited
   const [editTakeName, setEditTakeName] = useState('');
 
+  // Grid layout: 'auto' = smart (2 cols even, 3 cols odd), '2col', '3col'
+  const [gridLayout, setGridLayout] = useState(() => localStorage.getItem('dashboard_grid_layout') || 'auto');
+
   const connectedCameras = cameras.filter(cam => cam.connected);
   const recordingCameras = cameras.filter(cam => cam.recording);
   const isRecording = recordingCameras.length > 0;
+
+  const handleGridLayout = (layout) => {
+    setGridLayout(layout);
+    localStorage.setItem('dashboard_grid_layout', layout);
+  };
+
+  const getGridClass = () => {
+    if (gridLayout === '2col') return 'grid-2col';
+    if (gridLayout === '3col') return 'grid-3col';
+    // auto: 2 cols for even, 3 cols for odd
+    return cameras.length % 2 === 0 ? 'grid-2col' : 'grid-3col';
+  };
 
   // Timer for recording duration
   useEffect(() => {
@@ -382,7 +397,13 @@ function RecordingDashboard({ cameras, onCamerasUpdate, apiUrl, activeShoot, onS
       )}
 
       {/* Section B: Camera Health Grid */}
-      <div className="health-grid">
+      <div className="grid-layout-bar">
+        <span className="layout-label">Layout</span>
+        <button className={`layout-btn ${gridLayout === 'auto' ? 'active' : ''}`} onClick={() => handleGridLayout('auto')}>Auto</button>
+        <button className={`layout-btn ${gridLayout === '2col' ? 'active' : ''}`} onClick={() => handleGridLayout('2col')}>2-Col</button>
+        <button className={`layout-btn ${gridLayout === '3col' ? 'active' : ''}`} onClick={() => handleGridLayout('3col')}>3-Col</button>
+      </div>
+      <div className={`health-grid ${getGridClass()}`}>
         {cameras.map((camera) => {
           const h = healthData[camera.serial] || {};
           const batteryPct = h.battery_percent ?? camera.battery_level;
