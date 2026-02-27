@@ -554,7 +554,7 @@ class COHNManager:
                 if asyncio.iscoroutine(result):
                     await result
 
-        total_steps = 15
+        total_steps = 16
         client = None
 
         try:
@@ -564,7 +564,16 @@ class COHNManager:
             logger.info(f"[COHN {serial}] Looking for BLE device: {ble_name}")
 
             device = None
-            devices = await BleakScanner.discover(timeout=15)
+            # GoPro BLE service UUIDs - needed on macOS 12+ to receive advertisement data
+            gopro_service_uuids = [
+                "0000fea6-0000-1000-8000-00805f9b34fb",  # GoPro WiFi Access Point
+                "b5f90001-aa8d-11e3-9046-0002a5d5c51b",  # GoPro Control & Query
+            ]
+            try:
+                devices = await BleakScanner.discover(timeout=15, service_uuids=gopro_service_uuids)
+            except TypeError:
+                # Fallback for older bleak versions that don't support service_uuids
+                devices = await BleakScanner.discover(timeout=15)
             for d in devices:
                 if d.name and ble_name in d.name:
                     device = d
@@ -609,8 +618,38 @@ class COHNManager:
             except Exception as e:
                 logger.warning(f"[COHN {serial}] Set date/time warning: {e}")
 
-            # Step 5: Start WiFi scan and wait for completion notification
-            await report(5, total_steps, "Scanning for WiFi networks...")
+            # Step 4b: Disable existing COHN and clear WiFi before scanning
+            # This is critical for re-provisioning: if the camera's WiFi radio is
+            # connected to a previous network (even one that's unreachable), the
+            # scan returns 0 entries and ConnectNew fails with FAILED_TO_ASSOCIATE.
+            try:
+                await report(5, total_steps, "Clearing old COHN config...")
+                # Disable COHN first: Feature 0xF1, Action 0x65 = SetCOHNSetting
+                # Protobuf: field 1 = cohn_active (bool, false)
+                disable_payload = self._encode_bool_field(1, False)
+                disable_packet = self._build_protobuf_payload(0xF1, 0x65, disable_payload)
+                try:
+                    await self._write_and_wait(client, CQ_COMMAND, CQ_COMMAND_RESP,
+                                                disable_packet, timeout=10)
+                except Exception as e:
+                    logger.debug(f"[COHN {serial}] Disable COHN: {e} (may not be provisioned)")
+
+                # Clear old COHN certificate: Feature 0xF1, Action 0x66 = ClearCOHNCert
+                clear_packet = self._build_protobuf_payload(0xF1, 0x66)
+                try:
+                    await self._write_and_wait(client, CQ_COMMAND, CQ_COMMAND_RESP,
+                                                clear_packet, timeout=10)
+                except Exception as e:
+                    logger.debug(f"[COHN {serial}] Clear cert: {e} (may not exist)")
+
+                # Give camera time to disconnect from old WiFi and release the radio
+                await asyncio.sleep(5)
+                logger.info(f"[COHN {serial}] Old COHN cleared, WiFi radio should be free")
+            except Exception as e:
+                logger.warning(f"[COHN {serial}] Pre-clean warning: {e}, continuing...")
+
+            # Step 6: Start WiFi scan and wait for completion notification
+            await report(6, total_steps, "Scanning for WiFi networks...")
             # Feature 0x02, Action 0x02 = StartScan (no payload)
             scan_body = self._build_protobuf_payload(0x02, 0x02)
             scan_id = 0
@@ -651,7 +690,7 @@ class COHNManager:
                 logger.warning(f"[COHN {serial}] Scan start error: {e}, proceeding anyway")
 
             # Step 6: Get scan results using scan_id
-            await report(6, total_steps, "Getting WiFi scan results...")
+            await report(7, total_steps, "Getting WiFi scan results...")
             get_entries_payload = (
                 self._encode_int_field(1, 0) +        # start_index
                 self._encode_int_field(2, 100) +       # max_entries
@@ -683,7 +722,7 @@ class COHNManager:
                 logger.warning(f"[COHN {serial}] Target SSID '{wifi_ssid}' may not be visible to camera")
 
             # Step 7: Connect to home WiFi (using fragmented BLE write for large payloads)
-            await report(7, total_steps, f"Connecting camera to {wifi_ssid}...")
+            await report(8, total_steps, f"Connecting camera to {wifi_ssid}...")
             # Feature 0x02, Action 0x05 = RequestConnectNew
             connect_protobuf = (
                 self._encode_string_field(1, wifi_ssid) +
@@ -726,76 +765,56 @@ class COHNManager:
             except Exception as e:
                 logger.warning(f"[COHN {serial}] WiFi connect warning: {e}, continuing to poll status...")
 
-            # Step 8: Wait for network connected state
-            await report(8, total_steps, "Waiting for WiFi connection...")
-            # Poll COHN status to check if network is connected
-            # Feature 0xF5, Action 0x6F = GetCOHNStatus
-            # IMPORTANT: Must include register_cohn_status=true (field 1) or camera returns empty
+            # Step 9: Wait for WiFi connection
+            # If WiFi provisioning already succeeded (state 5 or 6), skip lengthy polling.
+            # After we disabled COHN in step 5, the COHN status shows "Idle" even when
+            # WiFi is connected. We need to create cert + enable COHN first to get IP.
             connected = False
             discovered_ip = ""
-            for attempt in range(30):  # Up to 90 seconds (30 * 3s)
-                await asyncio.sleep(3)
-                try:
-                    register_payload = self._encode_bool_field(1, True)  # register_cohn_status = true
-                    status_packet = self._build_protobuf_payload(0xF5, 0x6F, register_payload)
-                    status_resp = await self._write_and_wait(client, CQ_QUERY, CQ_QUERY_RESP,
-                                                              status_packet, timeout=10)
-                    logger.info(f"[COHN {serial}] Status poll attempt {attempt}: {len(status_resp)}B raw={status_resp.hex()}")
-                    # Parse response - try offset 2 (feature+action) and offset 3 (feature+action+result)
-                    fields = self._parse_cohn_status_response(status_resp)
-                    if fields:
-                        logger.info(f"[COHN {serial}] Status poll fields: {{{', '.join(f'{k}: {v.hex() if isinstance(v, bytes) else v}' for k, v in fields.items())}}}")
-                        # NotifyCOHNStatus fields:
-                        # 1=status(enum), 2=state(enum), 3=username, 4=password,
-                        # 5=ipaddress, 6=enabled, 7=ssid, 8=macaddress
-                        # EnumCOHNNetworkState: 0=Init, 1=Error, 2=Exit, 5=Idle,
-                        #   27=NetworkConnected, 28=NetworkDisconnected, 29=ConnectingToNetwork, 30=Invalid
-                        state_val = fields.get(2, -1)
-                        state_names = {0:'Init', 1:'Error', 2:'Exit', 5:'Idle',
-                                       27:'NetworkConnected', 28:'NetworkDisconnected',
-                                       29:'ConnectingToNetwork', 30:'Invalid'}
-                        state_name = state_names.get(state_val, f'Unknown({state_val})')
-                        logger.info(f"[COHN {serial}] COHN state: {state_name} ({state_val}), status: {fields.get(1, '?')}")
+            if wifi_connected:
+                await report(9, total_steps, "WiFi connected, proceeding to COHN setup...")
+                connected = True
+                await asyncio.sleep(3)  # Brief wait for WiFi to stabilize
+            else:
+                await report(9, total_steps, "Waiting for WiFi connection...")
+                # Poll COHN status to check if network is connected
+                for attempt in range(30):  # Up to 90 seconds (30 * 3s)
+                    await asyncio.sleep(3)
+                    try:
+                        register_payload = self._encode_bool_field(1, True)
+                        status_packet = self._build_protobuf_payload(0xF5, 0x6F, register_payload)
+                        status_resp = await self._write_and_wait(client, CQ_QUERY, CQ_QUERY_RESP,
+                                                                  status_packet, timeout=10)
+                        logger.info(f"[COHN {serial}] Status poll attempt {attempt}: {len(status_resp)}B raw={status_resp.hex()}")
+                        fields = self._parse_cohn_status_response(status_resp)
+                        if fields:
+                            state_val = fields.get(2, -1)
+                            state_names = {0:'Init', 1:'Error', 2:'Exit', 5:'Idle',
+                                           27:'NetworkConnected', 28:'NetworkDisconnected',
+                                           29:'ConnectingToNetwork', 30:'Invalid'}
+                            state_name = state_names.get(state_val, f'Unknown({state_val})')
+                            logger.info(f"[COHN {serial}] COHN state: {state_name} ({state_val}), status: {fields.get(1, '?')}")
 
-                        ip_bytes = fields.get(5, b'')
-                        if isinstance(ip_bytes, bytes) and len(ip_bytes) > 0:
-                            ip_str = ip_bytes.decode('utf-8', errors='ignore')
-                            if ip_str and '.' in ip_str:
-                                logger.info(f"[COHN {serial}] Camera got IP: {ip_str}")
-                                discovered_ip = ip_str
+                            ip_bytes = fields.get(5, b'')
+                            if isinstance(ip_bytes, bytes) and len(ip_bytes) > 0:
+                                ip_str = ip_bytes.decode('utf-8', errors='ignore')
+                                if ip_str and '.' in ip_str:
+                                    logger.info(f"[COHN {serial}] Camera got IP: {ip_str}")
+                                    discovered_ip = ip_str
+                                    connected = True
+                            if state_val == 27:
                                 connected = True
-                        if state_val == 27:  # COHN_STATE_NetworkConnected
-                            connected = True
-                        if connected:
-                            break
-                except Exception as e:
-                    logger.info(f"[COHN {serial}] Status poll attempt {attempt} error: {e}")
+                            if connected:
+                                break
+                    except Exception as e:
+                        logger.info(f"[COHN {serial}] Status poll attempt {attempt} error: {e}")
 
-            if not connected:
-                # Also drain any async notifications that arrived
-                query_queue = self._notification_data.get(CQ_QUERY_RESP)
-                if query_queue:
-                    while not query_queue.empty():
-                        try:
-                            async_resp = query_queue.get_nowait()
-                            logger.info(f"[COHN {serial}] Async notification: {len(async_resp)}B raw={async_resp.hex()}")
-                            fields = self._parse_cohn_status_response(async_resp)
-                            if fields:
-                                ip_bytes = fields.get(5, b'')
-                                if isinstance(ip_bytes, bytes):
-                                    ip_str = ip_bytes.decode('utf-8', errors='ignore')
-                                    if ip_str and '.' in ip_str:
-                                        discovered_ip = ip_str
-                                        connected = True
-                        except asyncio.QueueEmpty:
-                            break
-
-            if not connected:
-                logger.info(f"[COHN {serial}] Waiting additional time for WiFi connection...")
-                await asyncio.sleep(15)
+                if not connected:
+                    logger.info(f"[COHN {serial}] Waiting additional time for WiFi connection...")
+                    await asyncio.sleep(15)
 
             # Step 9: Clear old COHN cert
-            await report(9, total_steps, "Clearing old COHN certificate...")
+            await report(10, total_steps, "Clearing old COHN certificate...")
             # Feature 0xF1, Action 0x66 = ClearCOHNCert
             clear_packet = self._build_protobuf_payload(0xF1, 0x66)
             try:
@@ -806,7 +825,7 @@ class COHNManager:
                 logger.warning(f"[COHN {serial}] Clear cert warning (may not exist): {e}")
 
             # Step 10: Create new COHN cert
-            await report(10, total_steps, "Creating new COHN certificate...")
+            await report(11, total_steps, "Creating new COHN certificate...")
             # Feature 0xF1, Action 0x67 = CreateCOHNCert
             # Protobuf: field 1 = override (bool, true)
             create_payload = self._encode_bool_field(1, True)
@@ -816,7 +835,7 @@ class COHNManager:
             await asyncio.sleep(3)
 
             # Step 11: Get COHN cert
-            await report(11, total_steps, "Retrieving COHN certificate...")
+            await report(12, total_steps, "Retrieving COHN certificate...")
             # Feature 0xF5, Action 0x6E = GetCOHNCert
             cert_packet = self._build_protobuf_payload(0xF5, 0x6E)
             cert_resp = await self._write_and_wait(client, CQ_QUERY, CQ_QUERY_RESP,
@@ -839,7 +858,7 @@ class COHNManager:
                             continue
 
             # Step 12: Get COHN status (username, password, IP)
-            await report(12, total_steps, "Getting COHN credentials...")
+            await report(13, total_steps, "Getting COHN credentials...")
             register_payload = self._encode_bool_field(1, True)  # register_cohn_status = true
             status_packet = self._build_protobuf_payload(0xF5, 0x6F, register_payload)
             status_resp = await self._write_and_wait(client, CQ_QUERY, CQ_QUERY_RESP,
@@ -908,32 +927,70 @@ class COHNManager:
                 except Exception as e:
                     logger.warning(f"[COHN {serial}] Network scan failed: {e}")
 
-            # Validate IP and password before storing
-            if not ip_address or '.' not in ip_address:
-                raise Exception(
-                    f"Camera did not return a valid IP address (got: '{ip_address}'). "
-                    "The camera may not have connected to WiFi successfully. "
-                    "Check WiFi credentials and try again."
-                )
             if not password:
                 logger.warning(f"[COHN {serial}] No COHN password returned, using default")
-                password = "gopro_cohn"  # Fallback - may not work but lets provisioning complete
+                password = "gopro_cohn"
 
-            # Step 13: Enable COHN
-            await report(13, total_steps, "Enabling COHN...")
-            # Feature 0xF1, Action 0x65 = SetCOHNSetting
-            # Protobuf: field 1 = cohn_active (bool, true)
+            # Step 13: Enable COHN (must happen before IP is available)
+            await report(14, total_steps, "Enabling COHN...")
             enable_payload = self._encode_bool_field(1, True)
             enable_packet = self._build_protobuf_payload(0xF1, 0x65, enable_payload)
             try:
                 await self._write_and_wait(client, CQ_COMMAND, CQ_COMMAND_RESP,
                                             enable_packet, timeout=15)
-                await asyncio.sleep(2)
+                await asyncio.sleep(3)
             except Exception as e:
                 logger.warning(f"[COHN {serial}] Enable COHN warning: {e}")
 
+            # Step 13b: Poll for IP after enabling COHN
+            if not ip_address or '.' not in ip_address:
+                logger.info(f"[COHN {serial}] No IP yet, polling COHN status after enable...")
+                for poll_attempt in range(15):  # Up to 45 seconds
+                    await asyncio.sleep(3)
+                    try:
+                        register_payload = self._encode_bool_field(1, True)
+                        status_packet = self._build_protobuf_payload(0xF5, 0x6F, register_payload)
+                        status_resp = await self._write_and_wait(client, CQ_QUERY, CQ_QUERY_RESP,
+                                                                  status_packet, timeout=10)
+                        fields = self._parse_cohn_status_response(status_resp)
+                        if fields:
+                            state_val = fields.get(2, -1)
+                            state_names = {0:'Init', 1:'Error', 2:'Exit', 5:'Idle',
+                                           27:'NetworkConnected', 28:'NetworkDisconnected',
+                                           29:'ConnectingToNetwork', 30:'Invalid'}
+                            logger.info(f"[COHN {serial}] Post-enable poll {poll_attempt}: "
+                                       f"state={state_names.get(state_val, state_val)}, "
+                                       f"fields={{{', '.join(f'{k}: {v.hex() if isinstance(v, bytes) else v}' for k, v in fields.items())}}}")
+                            # Extract IP from field 5
+                            ip_bytes = fields.get(5, b'')
+                            if isinstance(ip_bytes, bytes) and len(ip_bytes) > 0:
+                                ip_str = ip_bytes.decode('utf-8', errors='ignore')
+                                if ip_str and '.' in ip_str:
+                                    ip_address = ip_str
+                                    logger.info(f"[COHN {serial}] Got IP after enable: {ip_address}")
+                                    break
+                            # Extract username/password if not already set
+                            if not username:
+                                u_bytes = fields.get(3, b'')
+                                if isinstance(u_bytes, bytes) and len(u_bytes) > 0:
+                                    username = u_bytes.decode('utf-8', errors='ignore')
+                            if not password or password == "gopro_cohn":
+                                p_bytes = fields.get(4, b'')
+                                if isinstance(p_bytes, bytes) and len(p_bytes) > 0:
+                                    password = p_bytes.decode('utf-8', errors='ignore')
+                    except Exception as e:
+                        logger.debug(f"[COHN {serial}] Post-enable poll error: {e}")
+
+            # Validate IP
+            if not ip_address or '.' not in ip_address:
+                raise Exception(
+                    f"Camera did not return a valid IP address (got: '{ip_address}'). "
+                    "WiFi provisioning succeeded but COHN did not report an IP. "
+                    "Try again or check network connectivity."
+                )
+
             # Step 14: Store credentials
-            await report(14, total_steps, "Storing credentials...")
+            await report(15, total_steps, "Storing credentials...")
             self.credentials[serial] = {
                 "ip_address": ip_address,
                 "username": username,
@@ -946,7 +1003,7 @@ class COHNManager:
             logger.info(f"[COHN {serial}] Credentials saved")
 
             # Step 15: Disconnect BLE
-            await report(15, total_steps, "Provisioning complete!")
+            await report(16, total_steps, "Provisioning complete!")
             await client.disconnect()
             logger.info(f"[COHN {serial}] BLE disconnected, provisioning complete")
 

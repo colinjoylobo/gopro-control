@@ -243,6 +243,12 @@ async def connection_monitor():
                     try:
                         health_data = await camera_manager.get_all_health()
                         _cached_health_data.update(health_data)
+                        # Log storage values for debugging
+                        for serial, hd in health_data.items():
+                            storage = hd.get("storage_remaining_kb")
+                            battery = hd.get("battery_percent")
+                            if storage is not None or battery is not None:
+                                logger.info(f"[{serial}] Health: battery={battery}%, storage={storage}KB")
                         if websocket_connections:
                             await broadcast_message({
                                 "type": "health_update",

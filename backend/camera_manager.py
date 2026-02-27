@@ -416,27 +416,8 @@ class CameraInstance:
             return None
         return round((oldest_level - newest_level) / elapsed_hours, 1)
 
-    async def _get_status_value(self, status_accessor) -> Optional[any]:
-        """Safely get a single BLE status value"""
-        try:
-            loop = asyncio.get_event_loop()
-            resp, err = await loop.run_in_executor(
-                None,
-                self._ble_cmd_in_thread,
-                status_accessor.get_value,
-                (),
-                5
-            )
-            if err:
-                return None
-            # Extract value from response data
-            for key, val in resp.data.items():
-                return val
-        except Exception:
-            return None
-
     async def get_health_status(self) -> dict:
-        """Query all health metrics in one call"""
+        """Query all health metrics in one bulk BLE call (instead of 12+ individual queries)"""
         self.update_connection_status()
         if not self.connected or not self.gopro or not self.gopro.is_ble_connected:
             return {"error": "Not connected"}
@@ -448,56 +429,68 @@ class CameraInstance:
             "recording": self.recording,
         }
 
-        async def _safe_status(attr_name, default=None):
-            """Safely read a BLE status attribute, returning default if attr doesn't exist"""
-            try:
-                attr = getattr(self.gopro.ble_status, attr_name, None)
-                if attr is None:
-                    return default
-                return await self._get_status_value(attr)
-            except Exception:
-                return default
+        try:
+            loop = asyncio.get_event_loop()
+            resp, err = await loop.run_in_executor(
+                None,
+                self._ble_cmd_in_thread,
+                self.gopro.ble_command.get_camera_statuses,
+                (),
+                10
+            )
+            if err:
+                logger.warning(f"[{self.serial}] Bulk status query failed: {err}")
+                health["battery_percent"] = self.battery_level
+                health["battery_drain_rate"] = self._calc_battery_drain_rate()
+                return health
 
-        # Battery (use cached + refresh)
-        battery = await _safe_status("int_batt_per")
-        if battery is not None:
-            self.battery_level = int(battery)
-            self.battery_history.append((datetime.now(), self.battery_level))
-            if len(self.battery_history) > 60:
-                self.battery_history = self.battery_history[-60:]
-        health["battery_percent"] = self.battery_level
-        health["battery_drain_rate"] = self._calc_battery_drain_rate()
+            data = resp.data if resp else {}
 
-        # Storage
-        health["storage_remaining_kb"] = await _safe_status("space_rem")
-        health["video_remaining_min"] = await _safe_status("video_rem")
-        sd_raw = await _safe_status("sd_status")
-        health["sd_status"] = str(sd_raw) if sd_raw is not None else None
+            # Battery
+            battery = data.get(StatusId.INT_BATT_PER)
+            if battery is not None:
+                self.battery_level = int(battery)
+                self.battery_history.append((datetime.now(), self.battery_level))
+                if len(self.battery_history) > 60:
+                    self.battery_history = self.battery_history[-60:]
+            health["battery_percent"] = self.battery_level
+            health["battery_drain_rate"] = self._calc_battery_drain_rate()
 
-        # Recording
-        health["recording_duration_sec"] = await _safe_status("video_progress")
-        encoding_raw = await _safe_status("encoding")
-        health["is_encoding"] = bool(encoding_raw) if encoding_raw is not None else self.recording
+            # Storage
+            health["storage_remaining_kb"] = data.get(StatusId.SPACE_REM)
+            health["video_remaining_min"] = data.get(StatusId.VIDEO_REM)
+            sd_raw = data.get(StatusId.SD_STATUS)
+            health["sd_status"] = str(sd_raw) if sd_raw is not None else None
 
-        # Thermal
-        hot_raw = await _safe_status("system_hot")
-        health["system_hot"] = bool(hot_raw) if hot_raw is not None else False
-        cold_raw = await _safe_status("video_low_temp")
-        health["too_cold"] = bool(cold_raw) if cold_raw is not None else False
-        thermal_raw = await _safe_status("thermal_mit_mode")
-        health["thermal_mitigation"] = bool(thermal_raw) if thermal_raw is not None else False
+            # Recording
+            health["recording_duration_sec"] = data.get(StatusId.VIDEO_PROGRESS)
+            encoding_raw = data.get(StatusId.ENCODING)
+            health["is_encoding"] = bool(encoding_raw) if encoding_raw is not None else self.recording
 
-        # GPS
-        gps_raw = await _safe_status("gps_stat")
-        health["gps_lock"] = bool(gps_raw) if gps_raw is not None else False
+            # Thermal
+            hot_raw = data.get(StatusId.SYSTEM_HOT)
+            health["system_hot"] = bool(hot_raw) if hot_raw is not None else False
+            cold_raw = data.get(StatusId.VIDEO_LOW_TEMP)
+            health["too_cold"] = bool(cold_raw) if cold_raw is not None else False
+            thermal_raw = data.get(StatusId.THERMAL_MIT_MODE)
+            health["thermal_mitigation"] = bool(thermal_raw) if thermal_raw is not None else False
 
-        # Media counts
-        health["num_videos"] = await _safe_status("num_total_video")
-        health["num_photos"] = await _safe_status("num_total_photo")
+            # GPS
+            gps_raw = data.get(StatusId.GPS_STAT)
+            health["gps_lock"] = bool(gps_raw) if gps_raw is not None else False
 
-        # Orientation
-        orient_raw = await _safe_status("orientation")
-        health["orientation"] = str(orient_raw) if orient_raw is not None else None
+            # Media counts
+            health["num_videos"] = data.get(StatusId.NUM_TOTAL_VIDEO)
+            health["num_photos"] = data.get(StatusId.NUM_TOTAL_PHOTO)
+
+            # Orientation
+            orient_raw = data.get(StatusId.ORIENTATION)
+            health["orientation"] = str(orient_raw) if orient_raw is not None else None
+
+        except Exception as e:
+            logger.error(f"[{self.serial}] Health query error: {e}")
+            health["battery_percent"] = self.battery_level
+            health["battery_drain_rate"] = self._calc_battery_drain_rate()
 
         return health
 
