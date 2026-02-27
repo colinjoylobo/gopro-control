@@ -45,10 +45,16 @@ hiddenimports = [
     'open_gopro.constants',
     'open_gopro.responses',
 
-    # Bluetooth (bleak)
+    # Bluetooth (bleak) — include all platform backends for cross-platform builds
     'bleak',
     'bleak.backends',
-    'bleak.backends.corebluetooth',
+    'bleak.backends.corebluetooth',  # macOS
+    'bleak.backends.winrt',           # Windows
+    'bleak.backends.bluezdbus',       # Linux
+
+    # mDNS discovery
+    'zeroconf',
+    'ifaddr',
 
     # WebSockets
     'websockets',

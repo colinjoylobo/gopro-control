@@ -41,10 +41,13 @@ class PresetManager:
             logger.error(f"Failed to save presets: {e}")
 
     def save_preset(self, name: str, settings: dict):
-        """Create or update a preset"""
+        """Create or update a preset. Preserves existing pinned status on update."""
+        existing = self.presets.get(name, {})
+        pinned = existing.get("pinned", False)
         self.presets[name] = {
             **settings,
             "created_at": datetime.now().isoformat(),
+            "pinned": pinned,
         }
         self._save()
         logger.info(f"Saved preset: {name}")
@@ -55,8 +58,24 @@ class PresetManager:
         return self.presets.get(name)
 
     def list_presets(self) -> Dict[str, dict]:
-        """List all presets"""
-        return self.presets
+        """List all presets, pinned first"""
+        # Sort: pinned first, then alphabetical
+        sorted_names = sorted(
+            self.presets.keys(),
+            key=lambda n: (not self.presets[n].get("pinned", False), n.lower())
+        )
+        return {name: self.presets[name] for name in sorted_names}
+
+    def toggle_pin(self, name: str) -> Optional[bool]:
+        """Toggle pinned status. Returns new pinned value, or None if preset not found."""
+        preset = self.presets.get(name)
+        if not preset:
+            return None
+        new_val = not preset.get("pinned", False)
+        preset["pinned"] = new_val
+        self._save()
+        logger.info(f"Preset '{name}' pinned={new_val}")
+        return new_val
 
     def delete_preset(self, name: str) -> bool:
         """Delete a preset by name"""

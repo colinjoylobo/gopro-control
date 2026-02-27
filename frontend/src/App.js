@@ -244,13 +244,14 @@ function App() {
           className={`tab ${activeTab === 'cameras' ? 'active' : ''}`}
           onClick={() => setActiveTab('cameras')}
         >
-          Camera Management
+          Cameras{cameras.length > 0 && <span className="tab-badge">{cameras.length}</span>}
         </button>
         <button
           className={`tab ${activeTab === 'recording' ? 'active' : ''}`}
           onClick={() => setActiveTab('recording')}
         >
           Dashboard
+          {cameras.some(c => c.recording) && <span className="tab-badge tab-badge-rec">REC</span>}
         </button>
         <button
           className={`tab ${activeTab === 'preview' ? 'active' : ''}`}
@@ -262,7 +263,7 @@ function App() {
           className={`tab ${activeTab === 'download' ? 'active' : ''}`}
           onClick={() => setActiveTab('download')}
         >
-          Download & Upload
+          Download
         </button>
       </div>
 
@@ -282,6 +283,7 @@ function App() {
             apiUrl={API_URL}
             activeShoot={activeShoot}
             onShootUpdate={fetchActiveShoot}
+            setActiveTab={setActiveTab}
           />
         )}
         {activeTab === 'preview' && (
@@ -300,6 +302,7 @@ function App() {
             downloadWsMessage={downloadWsMessage}
             activeShoot={activeShoot}
             cohnStatus={cohnStatus}
+            onCamerasUpdate={fetchCameras}
           />
         )}
       </div>

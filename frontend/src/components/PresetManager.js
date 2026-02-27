@@ -188,6 +188,18 @@ function PresetManager({ cameras, apiUrl, cohnStatus }) {
     }
   };
 
+  const handleTogglePin = async (name) => {
+    try {
+      const response = await axios.patch(`${apiUrl}/api/presets/${encodeURIComponent(name)}`);
+      fetchPresets();
+      setMessage({ type: 'success', text: `Preset "${name}" ${response.data.pinned ? 'pinned' : 'unpinned'}` });
+      setTimeout(() => setMessage(null), 3000);
+    } catch (error) {
+      setMessage({ type: 'error', text: `Pin toggle failed: ${error.response?.data?.detail || error.message}` });
+      setTimeout(() => setMessage(null), 5000);
+    }
+  };
+
   const presetNames = Object.keys(presets);
   const currentPresetData = selectedPreset ? presets[selectedPreset] : null;
 
@@ -216,56 +228,75 @@ function PresetManager({ cameras, apiUrl, cohnStatus }) {
             </div>
           )}
 
-          {/* Preset Selection + Apply */}
-          <div className="preset-select-row">
-            <select
-              className="preset-select"
-              value={selectedPreset}
-              onChange={(e) => setSelectedPreset(e.target.value)}
-            >
-              <option value="">Select a preset...</option>
-              {presetNames.map(name => (
-                <option key={name} value={name}>{name}</option>
-              ))}
-            </select>
+          {/* Preset List */}
+          {presetNames.length > 0 ? (
+            <div className="preset-list">
+              {presetNames.map(name => {
+                const isPinned = presets[name]?.pinned;
+                const isSelected = selectedPreset === name;
+                return (
+                  <div
+                    key={name}
+                    className={`preset-list-item ${isSelected ? 'preset-list-item--selected' : ''}`}
+                    onClick={() => setSelectedPreset(isSelected ? '' : name)}
+                  >
+                    <button
+                      className={`btn-pin ${isPinned ? 'btn-pin--active' : ''}`}
+                      onClick={(e) => { e.stopPropagation(); handleTogglePin(name); }}
+                      title={isPinned ? 'Unpin' : 'Pin to top'}
+                    >
+                      {isPinned ? '\u2605' : '\u2606'}
+                    </button>
+                    <span className="preset-list-name">{name}</span>
+                    <button
+                      className="btn-delete-preset"
+                      onClick={(e) => { e.stopPropagation(); handleDeletePreset(name); }}
+                      title="Delete preset"
+                    >
+                      &times;
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <p style={{ color: 'var(--text-dimmed)', fontStyle: 'italic', fontSize: '0.85rem' }}>
+              No presets saved. Capture from a camera or create one manually below.
+            </p>
+          )}
 
-            <select
-              className="apply-target-select"
-              value={applyTarget}
-              onChange={(e) => setApplyTarget(e.target.value)}
-            >
-              <option value="all">All Cameras</option>
-              {connectedCameras.map(cam => (
-                <option key={cam.serial} value={cam.serial}>
-                  {cam.name || `GoPro ${cam.serial}`}
-                </option>
-              ))}
-            </select>
-
-            <button
-              className="btn btn-primary btn-sm"
-              onClick={handleApplyToAll}
-              disabled={!selectedPreset || connectedCameras.length === 0 || applying}
-            >
-              {applying ? 'Applying...' : applyTarget === 'all' ? 'Apply to All' : 'Apply'}
-            </button>
-
-            <span
-              className="transport-indicator"
-              style={{ color: useCohn ? '#2ecc71' : '#999', fontWeight: 'bold', fontSize: '0.85em', whiteSpace: 'nowrap' }}
-            >
-              {useCohn ? 'via COHN' : 'via BLE'}
-            </span>
-
-            {selectedPreset && (
-              <button
-                className="btn btn-danger btn-sm"
-                onClick={() => handleDeletePreset(selectedPreset)}
+          {/* Apply Controls */}
+          {selectedPreset && (
+            <div className="preset-select-row">
+              <select
+                className="apply-target-select"
+                value={applyTarget}
+                onChange={(e) => setApplyTarget(e.target.value)}
               >
-                Delete
+                <option value="all">All Cameras</option>
+                {connectedCameras.map(cam => (
+                  <option key={cam.serial} value={cam.serial}>
+                    {cam.name || `GoPro ${cam.serial}`}
+                  </option>
+                ))}
+              </select>
+
+              <button
+                className="btn btn-primary btn-sm"
+                onClick={handleApplyToAll}
+                disabled={!selectedPreset || connectedCameras.length === 0 || applying}
+              >
+                {applying ? 'Applying...' : applyTarget === 'all' ? 'Apply to All' : 'Apply'}
               </button>
-            )}
-          </div>
+
+              <span
+                className="transport-indicator"
+                style={{ color: useCohn ? '#2ecc71' : '#999', fontWeight: 'bold', fontSize: '0.85em', whiteSpace: 'nowrap' }}
+              >
+                {useCohn ? 'via COHN' : 'via BLE'}
+              </span>
+            </div>
+          )}
 
           {/* Selected Preset Details */}
           {currentPresetData && (
@@ -291,6 +322,12 @@ function PresetManager({ cameras, apiUrl, cohnStatus }) {
                   <span className="detail-label">Anti-Flicker</span>
                   <span className="detail-value">{formatSettingValue('anti_flicker', currentPresetData.anti_flicker)}</span>
                 </div>
+                {currentPresetData.shutter && (
+                  <div className="preset-detail-item">
+                    <span className="detail-label">Shutter</span>
+                    <span className="detail-value">{formatSettingValue('shutter', currentPresetData.shutter)}</span>
+                  </div>
+                )}
               </div>
 
               <div className="gps-toggle-row" style={{ marginTop: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>

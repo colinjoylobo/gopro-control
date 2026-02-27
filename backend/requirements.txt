@@ -6,3 +6,4 @@ requests
 pydantic
 python-multipart
 websockets
+zeroconf

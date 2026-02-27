@@ -27,6 +27,16 @@ echo.
 echo Step 1: Starting FastAPI Backend...
 echo -------------------------------------
 
+REM Kill any existing process on port 8000
+netstat -ano | findstr :8000 | findstr LISTENING >nul 2>&1
+if %errorlevel%==0 (
+    echo Killing existing process on port 8000...
+    for /f "tokens=5" %%a in ('netstat -ano ^| findstr :8000 ^| findstr LISTENING') do (
+        taskkill /F /PID %%a >nul 2>&1
+    )
+    timeout /t 2 /nobreak >nul
+)
+
 cd backend
 
 REM Check if virtual environment exists

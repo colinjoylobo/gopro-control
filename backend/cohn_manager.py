@@ -13,6 +13,7 @@ import logging
 import os
 import ssl
 import struct
+import subprocess
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -20,6 +21,7 @@ from typing import Dict, Optional, Callable
 
 import httpx
 from bleak import BleakClient, BleakScanner
+from zeroconf import Zeroconf, ServiceBrowser, ServiceStateChange
 
 logger = logging.getLogger(__name__)
 
@@ -750,12 +752,19 @@ class COHNManager:
                             logger.info(f"[COHN {serial}] Provisioning state: {prov_state}")
                             # EnumProvisioning: 0=STARTED, 1=NOT_STARTED, 2=ABORTED_REMAIN_ON,
                             # 3=ABORTED_REVERT_PREVIOUS, 4=ERROR, 5=SUCCESS_NEW_AP, 6=SUCCESS_OLD_AP
-                            if prov_state in (5, 6):  # SUCCESS_NEW_AP or SUCCESS_OLD_AP
-                                logger.info(f"[COHN {serial}] WiFi provisioning SUCCESS!")
+                            # 7=SUCCESS_ALREADY_CONNECTED (observed on newer firmware)
+                            # 8+=UNKNOWN — treat as error to avoid hanging
+                            if prov_state in (5, 6, 7):  # SUCCESS variants
+                                logger.info(f"[COHN {serial}] WiFi provisioning SUCCESS! (state={prov_state})")
                                 wifi_connected = True
                                 break
+                            elif prov_state in (0, 1):  # STARTED / NOT_STARTED — keep polling
+                                continue
                             elif prov_state in (2, 3, 4):  # ABORTED or ERROR
                                 logger.error(f"[COHN {serial}] WiFi provisioning FAILED: state={prov_state}")
+                                break
+                            else:  # Unknown state (8+) — treat as error
+                                logger.error(f"[COHN {serial}] WiFi provisioning FAILED: unknown state={prov_state}")
                                 break
                     except asyncio.TimeoutError:
                         continue
@@ -909,21 +918,16 @@ class COHNManager:
             if not ip_address or '.' not in ip_address:
                 logger.info(f"[COHN {serial}] No IP from BLE, trying network scan...")
                 try:
-                    import subprocess
-                    # Use arp -a to find GoPro on the network
-                    arp_output = subprocess.check_output(['arp', '-a'], text=True, timeout=5)
+                    arp_output = subprocess.check_output(['arp', '-a'], text=True, timeout=10)
                     if mac_address:
-                        mac_lower = mac_address.lower().replace(':', '')
+                        mac_lower = mac_address.lower().replace(':', '').replace('-', '')
                         for line in arp_output.split('\n'):
-                            line_mac = ''.join(c for c in line.split('at')[-1].split('on')[0] if c in '0123456789abcdef').lower() if 'at' in line else ''
-                            if mac_lower and mac_lower in line_mac:
-                                # Extract IP from arp line: ? (192.168.x.x) at ...
-                                parts = line.split('(')
-                                if len(parts) > 1:
-                                    ip_candidate = parts[1].split(')')[0]
-                                    if '.' in ip_candidate:
-                                        ip_address = ip_candidate
-                                        logger.info(f"[COHN {serial}] Found IP via ARP: {ip_address}")
+                            ip_candidate, line_mac = self._parse_arp_line(line)
+                            if mac_lower and line_mac and mac_lower in line_mac:
+                                if ip_candidate and '.' in ip_candidate:
+                                    ip_address = ip_candidate
+                                    logger.info(f"[COHN {serial}] Found IP via ARP: {ip_address}")
+                                    break
                 except Exception as e:
                     logger.warning(f"[COHN {serial}] Network scan failed: {e}")
 
@@ -1002,6 +1006,20 @@ class COHNManager:
             self._save()
             logger.info(f"[COHN {serial}] Credentials saved")
 
+            # Set Auto Power Down to NEVER (setting 59, option 0)
+            # This prevents the camera from sleeping while on USB power
+            try:
+                import base64 as _b64
+                _auth = _b64.b64encode(f"{username}:{password}".encode()).decode()
+                async with httpx.AsyncClient(verify=False, timeout=5.0) as _hc:
+                    _resp = await _hc.get(
+                        f"https://{ip_address}/gopro/camera/setting?setting=59&option=0",
+                        headers={"Authorization": f"Basic {_auth}"}
+                    )
+                    logger.info(f"[COHN {serial}] Auto Power Down set to NEVER: HTTP {_resp.status_code}")
+            except Exception as e:
+                logger.warning(f"[COHN {serial}] Failed to set Auto Power Down (non-fatal): {e}")
+
             # Step 15: Disconnect BLE
             await report(16, total_steps, "Provisioning complete!")
             await client.disconnect()
@@ -1064,6 +1082,135 @@ class COHNManager:
             return None
         return f"https://{creds['ip_address']}"
 
+    # ============== IP Recovery ==============
+
+    @staticmethod
+    def _parse_arp_line(line: str):
+        """Parse a single ARP table line into (ip, normalized_mac).
+        Handles both macOS/Linux format:  ? (192.168.x.x) at aa:bb:cc:dd:ee:ff on en0 ...
+        and Windows format:               192.168.1.100    aa-bb-cc-dd-ee-ff    dynamic
+        Returns (ip_str, mac_hex_lower) or (None, None) on parse failure."""
+        import sys as _sys
+        try:
+            if _sys.platform == "win32":
+                # Windows: "  192.168.1.100         aa-bb-cc-dd-ee-ff     dynamic"
+                parts = line.split()
+                if len(parts) >= 3:
+                    ip_candidate = parts[0]
+                    mac_raw = parts[1]
+                    if '.' in ip_candidate and ('-' in mac_raw or ':' in mac_raw):
+                        mac_norm = mac_raw.lower().replace('-', '').replace(':', '')
+                        return ip_candidate, mac_norm
+            else:
+                # macOS/Linux: "? (192.168.x.x) at aa:bb:cc:dd:ee:ff on en0 ..."
+                if 'at' not in line:
+                    return None, None
+                mac_raw = line.split('at')[1].split('on')[0].strip()
+                mac_norm = mac_raw.lower().replace(':', '').replace('-', '').replace(' ', '')
+                ip_parts = line.split('(')
+                if len(ip_parts) > 1:
+                    ip_candidate = ip_parts[1].split(')')[0]
+                    return ip_candidate, mac_norm
+        except (IndexError, ValueError):
+            pass
+        return None, None
+
+    async def _discover_ip_by_mdns(self, serial: str, timeout: float = 5.0) -> Optional[str]:
+        """Browse _gopro-web._tcp.local. for the camera's IP via mDNS.
+        Matches by serial substring in the service name. Returns IP or None.
+        Note: HERO13 does NOT advertise _gopro-web, so ARP remains essential."""
+        found_ip: Optional[str] = None
+        event = asyncio.Event()
+        serial_lower = serial.lower()
+
+        class _Listener:
+            def add_service(self, zc: Zeroconf, stype: str, name: str) -> None:
+                nonlocal found_ip
+                if found_ip:
+                    return
+                info = zc.get_service_info(stype, name)
+                if info is None:
+                    return
+                # GoPro service names typically contain the camera serial/name
+                name_lower = name.lower()
+                if serial_lower in name_lower:
+                    addresses = info.parsed_addresses()
+                    if addresses:
+                        found_ip = addresses[0]
+                        event.set()
+
+            def remove_service(self, zc: Zeroconf, stype: str, name: str) -> None:
+                pass
+
+            def update_service(self, zc: Zeroconf, stype: str, name: str) -> None:
+                pass
+
+        zc = Zeroconf()
+        listener = _Listener()
+        try:
+            browser = ServiceBrowser(zc, "_gopro-web._tcp.local.", listener)
+            try:
+                await asyncio.wait_for(event.wait(), timeout=timeout)
+            except asyncio.TimeoutError:
+                pass
+            if found_ip:
+                creds = self.credentials.get(serial)
+                if creds and creds.get('ip_address') != found_ip:
+                    logger.info(f"[COHN {serial}] IP recovered via mDNS: {creds.get('ip_address')} -> {found_ip}")
+                    creds['ip_address'] = found_ip
+                    self._save()
+                return found_ip
+        except Exception as e:
+            logger.debug(f"[COHN {serial}] mDNS discovery failed: {e}")
+        finally:
+            zc.close()
+        return None
+
+    def _recover_ip_by_mac(self, serial: str) -> Optional[str]:
+        """ARP-scan for a camera's MAC address to find its current IP.
+        Returns new IP if found, else None. Updates stored credentials on success."""
+        creds = self.credentials.get(serial)
+        if not creds:
+            return None
+        mac = creds.get("mac_address", "")
+        if not mac:
+            logger.debug(f"[COHN {serial}] No MAC address stored, cannot recover IP")
+            return None
+
+        try:
+            arp_output = subprocess.check_output(['arp', '-a'], text=True, timeout=10)
+        except Exception as e:
+            logger.warning(f"[COHN {serial}] ARP scan failed: {e}")
+            return None
+
+        # Normalize stored MAC: lowercase, strip colons/dashes
+        mac_lower = mac.lower().replace(':', '').replace('-', '')
+        if not mac_lower:
+            return None
+
+        for line in arp_output.split('\n'):
+            ip_candidate, line_mac = self._parse_arp_line(line)
+            if not line_mac:
+                continue
+            if mac_lower in line_mac or line_mac in mac_lower:
+                if ip_candidate and '.' in ip_candidate and ip_candidate != creds.get('ip_address'):
+                    logger.info(f"[COHN {serial}] IP recovered via ARP: {creds.get('ip_address')} -> {ip_candidate}")
+                    creds['ip_address'] = ip_candidate
+                    self._save()
+                    return ip_candidate
+        return None
+
+    def update_ip(self, serial: str, ip_address: str) -> bool:
+        """Manually update a camera's stored IP address."""
+        creds = self.credentials.get(serial)
+        if not creds:
+            return False
+        old_ip = creds.get('ip_address')
+        creds['ip_address'] = ip_address
+        self._save()
+        logger.info(f"[COHN {serial}] IP manually updated: {old_ip} -> {ip_address}")
+        return True
+
     # ============== COHN Status (HTTPS) ==============
 
     def _write_temp_cert(self, serial: str, certificate: str) -> Optional[str]:
@@ -1076,24 +1223,46 @@ class COHNManager:
         return str(cert_path)
 
     async def check_camera_online(self, serial: str) -> bool:
-        """Check if a COHN-provisioned camera is reachable via HTTPS"""
+        """Check if a COHN-provisioned camera is reachable via HTTPS.
+        If unreachable and MAC is stored, attempts ARP-based IP recovery."""
         creds = self.credentials.get(serial)
         if not creds or not creds.get('ip_address'):
             return False
 
-        try:
-            base_url = f"https://{creds['ip_address']}"
-            auth_header = self.get_auth_header(serial)
+        auth_header = self.get_auth_header(serial)
 
-            async with httpx.AsyncClient(verify=False, timeout=5.0) as client:
-                resp = await client.get(
-                    f"{base_url}/gopro/camera/state",
-                    headers={"Authorization": auth_header} if auth_header else {}
-                )
-                return resp.status_code == 200
-        except Exception as e:
-            logger.debug(f"[COHN {serial}] Online check failed: {e}")
-            return False
+        async def _try_reach(ip: str) -> bool:
+            try:
+                async with httpx.AsyncClient(verify=False, timeout=5.0) as client:
+                    resp = await client.get(
+                        f"https://{ip}/gopro/camera/state",
+                        headers={"Authorization": auth_header} if auth_header else {}
+                    )
+                    return resp.status_code == 200
+            except Exception:
+                return False
+
+        # Try stored IP first
+        if await _try_reach(creds['ip_address']):
+            return True
+
+        # Stored IP failed — try mDNS discovery (works on HERO12, not HERO13)
+        mdns_ip = await self._discover_ip_by_mdns(serial)
+        if mdns_ip:
+            if await _try_reach(mdns_ip):
+                logger.info(f"[COHN {serial}] Camera recovered via mDNS at {mdns_ip}")
+                return True
+
+        # mDNS failed — try ARP recovery if MAC is available
+        if creds.get('mac_address'):
+            new_ip = self._recover_ip_by_mac(serial)
+            if new_ip:
+                if await _try_reach(new_ip):
+                    logger.info(f"[COHN {serial}] Camera recovered via ARP at {new_ip}")
+                    return True
+
+        logger.debug(f"[COHN {serial}] Online check failed (IP: {creds.get('ip_address')})")
+        return False
 
     async def check_all_cameras(self) -> Dict[str, bool]:
         """Check all provisioned cameras"""

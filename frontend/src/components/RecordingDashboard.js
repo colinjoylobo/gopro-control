@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import './RecordingDashboard.css';
 
-function RecordingDashboard({ cameras, onCamerasUpdate, apiUrl, activeShoot, onShootUpdate }) {
+function RecordingDashboard({ cameras, onCamerasUpdate, apiUrl, activeShoot, onShootUpdate, setActiveTab }) {
   const [recordingTime, setRecordingTime] = useState(0);
   const [message, setMessage] = useState(null);
   const [starting, setStarting] = useState(false);
@@ -439,7 +439,10 @@ function RecordingDashboard({ cameras, onCamerasUpdate, apiUrl, activeShoot, onS
               </div>
 
               {!camera.connected ? (
-                <div className="health-disconnected">Disconnected</div>
+                <div className="health-disconnected">
+                  <span>Disconnected</span>
+                  <span className="health-no-data-hint">Connect camera to see health data</span>
+                </div>
               ) : (
                 <div className="health-card-body">
                   {/* Battery Gauge */}
@@ -490,6 +493,11 @@ function RecordingDashboard({ cameras, onCamerasUpdate, apiUrl, activeShoot, onS
                     )}
                     {h.num_photos != null && (
                       <span className="health-badge info">{h.num_photos} photos</span>
+                    )}
+                    {h.source && (
+                      <span className={`health-badge ${h.source === 'cohn' ? 'cohn' : 'ble'}`}>
+                        via {h.source === 'cohn' ? 'COHN' : 'BLE'}
+                      </span>
                     )}
                   </div>
                 </div>
@@ -617,8 +625,16 @@ function RecordingDashboard({ cameras, onCamerasUpdate, apiUrl, activeShoot, onS
                         {take.stopped_at && <span className="take-time">Stopped: {new Date(take.stopped_at).toLocaleTimeString()}</span>}
                       </div>
 
-                      {/* Delete */}
-                      <div className="take-detail-row">
+                      {/* Actions */}
+                      <div className="take-detail-row take-detail-actions">
+                        {take.stopped_at && setActiveTab && (
+                          <button
+                            className="btn btn-primary btn-sm"
+                            onClick={() => setActiveTab('download')}
+                          >
+                            Download Take
+                          </button>
+                        )}
                         <button
                           className="btn btn-danger btn-sm"
                           onClick={() => handleDeleteTake(take.take_number)}

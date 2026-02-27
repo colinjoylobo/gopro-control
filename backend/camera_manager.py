@@ -487,6 +487,8 @@ class CameraInstance:
             orient_raw = data.get(StatusId.ORIENTATION)
             health["orientation"] = str(orient_raw) if orient_raw is not None else None
 
+            health["source"] = "ble"
+
         except Exception as e:
             logger.error(f"[{self.serial}] Health query error: {e}")
             health["battery_percent"] = self.battery_level

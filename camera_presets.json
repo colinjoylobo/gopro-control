@@ -22,5 +22,14 @@
     "hypersmooth": "Off",
     "anti_flicker": "60Hz",
     "created_at": "2026-02-25T17:12:16.925367"
+  },
+  "Preset 2": {
+    "resolution": "RES_4K",
+    "fps": "FPS_60",
+    "video_fov": "LINEAR",
+    "hypersmooth": "OFF",
+    "anti_flicker": "HZ_50",
+    "created_at": "2026-02-27T19:53:52.843069",
+    "pinned": false
   }
 }

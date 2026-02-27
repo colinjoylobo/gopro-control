@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from typing import List, Optional, Dict
 import asyncio
 import ssl
+import sys
 import tempfile
 import base64
 import logging
@@ -189,8 +190,12 @@ async def connection_monitor():
     battery_poll_counter = 0
     health_poll_counter = 0
     cohn_poll_counter = 0
+    keep_alive_counter = 0
     ble_probe_counter = 0
     previous_cohn_online = {}
+
+    # Persistent HTTP client for lightweight keep-alive pings
+    keep_alive_client = httpx.AsyncClient(verify=False, timeout=2.0)
 
     logger.info("🔄 Connection monitor started - checking every 0.5 seconds")
 
@@ -282,7 +287,33 @@ async def connection_monitor():
                     except Exception as e:
                         logger.debug(f"Health poll error: {e}")
 
-            # Poll COHN cameras every 30 seconds (60 * 0.5s) - also serves as keep-alive
+            # Dedicated keep-alive every 3 seconds (6 * 0.5s) — lightweight ping only
+            keep_alive_counter += 1
+            if keep_alive_counter >= 6:
+                keep_alive_counter = 0
+                if previous_cohn_online:
+                    async def _ping_keep_alive(serial: str) -> None:
+                        creds = cohn_manager.get_credentials(serial)
+                        if not creds:
+                            return
+                        ip = creds.get("ip_address")
+                        auth = cohn_manager.get_auth_header(serial)
+                        try:
+                            await keep_alive_client.get(
+                                f"https://{ip}/gopro/camera/keep_alive",
+                                headers={"Authorization": auth} if auth else {}
+                            )
+                        except Exception:
+                            pass
+
+                    online_serials = [s for s, ok in previous_cohn_online.items() if ok]
+                    if online_serials:
+                        await asyncio.gather(
+                            *[_ping_keep_alive(s) for s in online_serials],
+                            return_exceptions=True
+                        )
+
+            # Poll COHN cameras every 30 seconds (60 * 0.5s) - full state check + IP recovery
             cohn_poll_counter += 1
             if cohn_poll_counter >= 60:
                 cohn_poll_counter = 0
@@ -299,19 +330,20 @@ async def connection_monitor():
                                         "serial": serial,
                                         "online": online
                                     })
-                        # Send keep-alive to online cameras
-                        for serial, is_online in cohn_online.items():
-                            if is_online:
-                                creds = cohn_manager.get_credentials(serial)
-                                if creds:
-                                    ip = creds.get("ip_address")
-                                    auth = cohn_manager.get_auth_header(serial)
-                                    try:
-                                        async with httpx.AsyncClient(verify=False, timeout=3.0) as kc:
-                                            await kc.get(f"https://{ip}/gopro/camera/keep_alive",
-                                                        headers={"Authorization": auth} if auth else {})
-                                    except Exception:
-                                        pass
+                                # Camera came online — enforce Auto Power Down = NEVER
+                                if online and prev is not True:
+                                    creds = cohn_manager.get_credentials(serial)
+                                    if creds:
+                                        ip = creds.get("ip_address")
+                                        auth = cohn_manager.get_auth_header(serial)
+                                        try:
+                                            resp = await keep_alive_client.get(
+                                                f"https://{ip}/gopro/camera/setting?setting=59&option=0",
+                                                headers={"Authorization": auth} if auth else {}
+                                            )
+                                            logger.info(f"[{serial}] Auto Power Down set to NEVER on reconnect: HTTP {resp.status_code}")
+                                        except Exception as e:
+                                            logger.debug(f"[{serial}] Failed to set Auto Power Down on reconnect: {e}")
                     except Exception as e:
                         logger.debug(f"COHN poll error: {e}")
 
@@ -328,6 +360,7 @@ async def connection_monitor():
             logger.error(f"Connection monitor error: {e}")
             await asyncio.sleep(0.5)
 
+    await keep_alive_client.aclose()
     logger.info("🛑 Connection monitor stopped")
 
 
@@ -1310,6 +1343,107 @@ async def get_media_list(serial: Optional[str] = None):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/download/shoot/{shoot_id}")
+async def download_all_takes_for_shoot(shoot_id: str):
+    """Download ALL completed takes for a shoot from all COHN cameras in parallel.
+    Fetches media list once per camera, filters files matching any take window."""
+    try:
+        # Find shoot
+        target_shoot = None
+        for s in shoot_manager.list_shoots():
+            if s["id"] == shoot_id:
+                target_shoot = s
+                break
+        if not target_shoot:
+            raise HTTPException(status_code=404, detail=f"Shoot {shoot_id} not found")
+
+        # Build take windows from completed takes
+        from datetime import datetime as dt, timezone
+        take_windows = []
+        for take in target_shoot.get("takes", []):
+            if not take.get("started_at") or not take.get("stopped_at"):
+                continue
+            start_naive = dt.fromisoformat(take["started_at"])
+            stop_naive = dt.fromisoformat(take["stopped_at"])
+            take_windows.append({
+                "take_number": take["take_number"],
+                "shoot_name": target_shoot["name"],
+                "take_start": int(start_naive.replace(tzinfo=timezone.utc).timestamp()) - 5,
+                "take_stop": int(stop_naive.replace(tzinfo=timezone.utc).timestamp()) + 5,
+            })
+
+        if not take_windows:
+            raise HTTPException(status_code=400, detail="No completed takes in this shoot")
+
+        # Get all COHN cameras
+        all_creds = cohn_manager.get_all_credentials()
+        if not all_creds:
+            raise HTTPException(status_code=400, detail="No COHN-provisioned cameras")
+
+        logger.info(f"Bulk download: shoot '{target_shoot['name']}', {len(take_windows)} take(s), {len(all_creds)} camera(s)")
+
+        # Launch parallel downloads across cameras
+        async def download_one_camera(serial, creds):
+            ip = creds.get("ip_address")
+            if not ip:
+                return serial, 0, "No IP"
+            base_url = f"https://{ip}"
+            auth = cohn_manager.get_auth_header(serial)
+
+            async def progress_cb(filename, current, total, percent):
+                await broadcast_message({
+                    "type": "download_progress",
+                    "serial": serial,
+                    "filename": filename,
+                    "current_file": current,
+                    "total_files": total,
+                    "percent": percent
+                })
+
+            files = await download_manager.async_download_all_from_camera(
+                serial=serial,
+                base_url=base_url,
+                auth_header=auth,
+                progress_callback=progress_cb,
+                take_windows=take_windows,
+            )
+            return serial, len(files), None
+
+        tasks = [download_one_camera(s, c) for s, c in all_creds.items()]
+        results_raw = await asyncio.gather(*tasks, return_exceptions=True)
+
+        total_files = 0
+        per_camera = {}
+        for result in results_raw:
+            if isinstance(result, Exception):
+                logger.error(f"Shoot download error: {result}")
+                continue
+            serial, count, error = result
+            per_camera[serial] = {"files": count, "error": error}
+            total_files += count
+
+            await broadcast_message({
+                "type": "download_complete",
+                "serial": serial,
+                "files_count": count,
+                "transport": "cohn"
+            })
+
+        return {
+            "success": True,
+            "shoot_name": target_shoot["name"],
+            "takes_count": len(take_windows),
+            "total_files": total_files,
+            "per_camera": per_camera
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Shoot download failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/download/{serial}")
 async def download_from_camera(serial: str, max_files: Optional[int] = None, shoot_name: Optional[str] = None, take_number: Optional[int] = None):
     """Download files from a camera (optionally limit to last N files). COHN-first, WiFi-direct fallback."""
@@ -1347,6 +1481,30 @@ async def download_from_camera(serial: str, max_files: Optional[int] = None, sho
                     "percent": percent
                 })
 
+            # Look up take time window for filtering
+            take_start = None
+            take_stop = None
+            if shoot_name and take_number is not None:
+                # Search all shoots for matching name
+                target_shoot = None
+                for s in shoot_manager.list_shoots():
+                    if s["name"] == shoot_name:
+                        target_shoot = s
+                        break
+                if target_shoot:
+                    for take in target_shoot.get("takes", []):
+                        if take["take_number"] == take_number:
+                            if take.get("started_at") and take.get("stopped_at"):
+                                from datetime import datetime as dt, timezone
+                                # GoPro mod_time = local wall clock encoded as UTC
+                                # So convert take times the same way (treat local as UTC)
+                                start_naive = dt.fromisoformat(take["started_at"])
+                                stop_naive = dt.fromisoformat(take["stopped_at"])
+                                take_start = int(start_naive.replace(tzinfo=timezone.utc).timestamp()) - 5
+                                take_stop = int(stop_naive.replace(tzinfo=timezone.utc).timestamp()) + 5
+                                logger.info(f"Take {take_number} time window: {take['started_at']} to {take['stopped_at']} (gopro-adjusted: {take_start}-{take_stop})")
+                            break
+
             downloaded_files = await download_manager.async_download_all_from_camera(
                 serial=serial,
                 base_url=cohn["base_url"],
@@ -1354,7 +1512,9 @@ async def download_from_camera(serial: str, max_files: Optional[int] = None, sho
                 progress_callback=cohn_progress,
                 max_files=max_files,
                 shoot_name=shoot_name,
-                take_number=take_number
+                take_number=take_number,
+                take_start=take_start,
+                take_stop=take_stop
             )
 
             await broadcast_message({
@@ -2270,18 +2430,42 @@ async def get_health_dashboard():
     try:
         health_data = {}
 
+        # Clear stale cached entries for cameras no longer in the manager
+        active_serials = set(camera_manager.cameras.keys())
+        stale_keys = [k for k in _cached_health_data if k not in active_serials]
+        for k in stale_keys:
+            del _cached_health_data[k]
+
         # Return cached health data (populated by background monitor every 15s)
         for serial, camera in camera_manager.cameras.items():
             if serial in _cached_health_data:
-                health_data[serial] = _cached_health_data[serial]
+                cached = _cached_health_data[serial]
+                # Update connection status from live camera state
+                cached["connected"] = camera.connected
+                cached["recording"] = cached.get("recording") or camera.recording
+                health_data[serial] = cached
             else:
-                # No cached data yet — return basic info
+                # No cached data yet — return complete field set with defaults
                 health_data[serial] = {
                     "serial": serial,
                     "name": camera.name,
                     "connected": camera.connected,
                     "recording": camera.recording,
                     "battery_percent": camera.battery_level,
+                    "battery_drain_rate": None,
+                    "storage_remaining_kb": None,
+                    "video_remaining_min": None,
+                    "sd_status": None,
+                    "is_encoding": camera.recording,
+                    "recording_duration_sec": None,
+                    "system_hot": False,
+                    "too_cold": False,
+                    "thermal_mitigation": False,
+                    "gps_lock": False,
+                    "num_videos": None,
+                    "num_photos": None,
+                    "orientation": None,
+                    "source": None,
                 }
 
         return {"cameras": health_data}
@@ -2327,7 +2511,8 @@ async def create_preset(preset: PresetCreateModel):
 
 @app.post("/api/presets/capture/{serial}")
 async def capture_preset(serial: str, body: dict):
-    """Capture current settings from a camera as a new preset"""
+    """Capture current settings from a camera as a new preset.
+    Uses BLE first, then enriches with COHN state to fill missing settings (e.g. shutter)."""
     try:
         camera = camera_manager.get_camera(serial)
         if not camera:
@@ -2339,6 +2524,32 @@ async def capture_preset(serial: str, body: dict):
         settings = await camera.get_current_settings()
         if "error" in settings:
             raise HTTPException(status_code=500, detail=settings["error"])
+
+        # Enrich with COHN state if available (fills in settings BLE doesn't read, like shutter)
+        cohn = _get_cohn_params(serial)
+        if cohn:
+            try:
+                state = await _cohn_get_state(cohn["base_url"].replace("https://", ""), cohn["auth_header"])
+                if "error" not in state:
+                    # Build reverse lookup: setting_id -> (setting_name, {option_id -> value_str})
+                    reverse_ids = {v: k for k, v in GOPRO_SETTING_IDS.items()}
+                    cohn_settings = state.get("settings", {})
+                    for sid_str, option_val in cohn_settings.items():
+                        try:
+                            sid = int(sid_str)
+                        except (ValueError, TypeError):
+                            continue
+                        setting_name = reverse_ids.get(sid)
+                        if not setting_name or setting_name in settings:
+                            continue
+                        # Reverse-lookup option value to friendly name
+                        values_map = GOPRO_SETTING_VALUES.get(setting_name, {})
+                        reverse_values = {v: k for k, v in values_map.items()}
+                        friendly = reverse_values.get(option_val, str(option_val))
+                        settings[setting_name] = friendly
+                        logger.info(f"[{serial}] COHN enriched: {setting_name} = {friendly}")
+            except Exception as e:
+                logger.debug(f"[{serial}] COHN enrichment failed: {e}")
 
         saved = preset_manager.save_preset(name, settings)
         return {"success": True, "name": name, "preset": saved}
@@ -2358,7 +2569,7 @@ async def apply_preset(name: str, body: PresetApplyModel):
             raise HTTPException(status_code=404, detail=f"Preset '{name}' not found")
 
         # Extract only the setting keys (exclude metadata like created_at)
-        setting_keys = {"resolution", "fps", "video_fov", "hypersmooth", "anti_flicker"}
+        setting_keys = {"resolution", "fps", "video_fov", "hypersmooth", "anti_flicker", "shutter"}
         settings = {k: v for k, v in preset.items() if k in setting_keys}
 
         # Determine target cameras
@@ -2396,6 +2607,15 @@ async def delete_preset(name: str):
     return {"success": True, "message": f"Preset '{name}' deleted"}
 
 
+@app.patch("/api/presets/{name}")
+async def toggle_preset_pin(name: str):
+    """Toggle pinned status on a preset"""
+    new_pinned = preset_manager.toggle_pin(name)
+    if new_pinned is None:
+        raise HTTPException(status_code=404, detail=f"Preset '{name}' not found")
+    return {"success": True, "name": name, "pinned": new_pinned}
+
+
 # ============== COHN Settings (HTTP-based, works over network) ==============
 
 # GoPro setting ID → name mapping, and name → value → option ID mapping
@@ -2406,6 +2626,7 @@ GOPRO_SETTING_IDS = {
     "hypersmooth": 135,
     "anti_flicker": 134,
     "gps": 83,
+    "shutter": 145,      # Shutter Speed
 }
 
 # Maps friendly enum names to GoPro numeric option values
@@ -2442,6 +2663,13 @@ GOPRO_SETTING_VALUES = {
     "gps": {
         "OFF": 0, "ON": 1,
         "Off": 0, "On": 1, "0": 0, "1": 1,
+    },
+    "shutter": {
+        "AUTO": 0, "1/30": 5, "1/60": 8, "1/120": 13, "1/240": 18,
+        "1/480": 22, "1/960": 23, "1/48": 6, "1/50": 7, "1/96": 11,
+        "1/100": 12, "1/192": 15, "1/200": 16, "1/360": 19, "1/400": 20,
+        # Friendly aliases
+        "auto": 0, "Auto": 0,
     },
 }
 
@@ -2564,7 +2792,7 @@ async def apply_preset_cohn(name: str, body: dict = {}):
     if not preset:
         raise HTTPException(status_code=404, detail=f"Preset '{name}' not found")
 
-    setting_keys = {"resolution", "fps", "video_fov", "hypersmooth", "anti_flicker"}
+    setting_keys = {"resolution", "fps", "video_fov", "hypersmooth", "anti_flicker", "shutter"}
     settings = {k: v for k, v in preset.items() if k in setting_keys and v is not None}
 
     serials = body.get("serials")
@@ -2692,7 +2920,7 @@ def _start_transcoder(serial: str) -> bool:
     if serial not in _cohn_stream_clients:
         _cohn_stream_clients[serial] = []
 
-    ffmpeg_bin = shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
+    ffmpeg_bin = shutil.which("ffmpeg") or ("ffmpeg.exe" if sys.platform == "win32" else "/opt/homebrew/bin/ffmpeg")
     cmd = [
         ffmpeg_bin,
         "-fflags", "nobuffer",
@@ -2713,12 +2941,17 @@ def _start_transcoder(serial: str) -> bool:
 
     logger.info(f"[COHN {serial}] Starting H.265→H.264 transcoder")
     try:
+        popen_kwargs = {}
+        if sys.platform == "win32":
+            popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        else:
+            popen_kwargs["preexec_fn"] = lambda: signal.signal(signal.SIGINT, signal.SIG_IGN)
         proc = subprocess.Popen(
             cmd,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
-            preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_IGN)
+            **popen_kwargs
         )
         _cohn_ffmpeg_procs[serial] = proc
 
@@ -2945,6 +3178,22 @@ async def switch_cohn_network(body: dict):
     }
 
 
+@app.patch("/api/cohn/camera/{serial}/ip")
+async def update_camera_ip(serial: str, body: dict):
+    """Manually update a camera's stored IP address (fallback when ARP can't find it)"""
+    ip_address = body.get("ip_address")
+    if not ip_address:
+        raise HTTPException(status_code=400, detail="ip_address is required")
+    if not cohn_manager.is_provisioned(serial):
+        raise HTTPException(status_code=404, detail=f"Camera {serial} not provisioned")
+    success = cohn_manager.update_ip(serial, ip_address)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to update IP")
+    # Verify connectivity at new IP
+    online = await cohn_manager.check_camera_online(serial)
+    return {"success": True, "serial": serial, "ip_address": ip_address, "online": online}
+
+
 @app.get("/api/cohn/status")
 async def get_cohn_status():
     """Get COHN status for all cameras"""
@@ -3103,9 +3352,37 @@ async def stream_cohn_ts(serial: str):
 _SNAPSHOT_BASE_PORT = 9100  # Snapshot captures use ports 9100+ (separate from stream port 8554)
 
 
-async def _capture_single_snapshot(serial: str, ip: str, auth: str, port: int, name: str) -> dict:
-    """Capture a single JPEG frame from a COHN camera via webcam/UDP/ffmpeg"""
+def _udp_to_pipe_thread(sock: socket.socket, proc_stdin, stop_event: threading.Event):
+    """Thread: read UDP packets from sock and write to ffmpeg stdin until stop or ffmpeg exits."""
+    try:
+        while not stop_event.is_set():
+            try:
+                data, _ = sock.recvfrom(65536)
+                if data:
+                    proc_stdin.write(data)
+                    proc_stdin.flush()
+            except socket.timeout:
+                continue
+            except (BrokenPipeError, OSError):
+                break
+    except Exception:
+        pass
+    finally:
+        try:
+            proc_stdin.close()
+        except Exception:
+            pass
+
+
+async def _capture_single_snapshot_inner(serial: str, ip: str, auth: str, port: int, name: str) -> dict:
+    """Capture a single JPEG frame from a COHN camera via webcam/UDP/ffmpeg.
+    Uses a Python UDP socket to receive the stream and pipes it to ffmpeg stdin,
+    because ffmpeg 8.0's built-in UDP demuxer has issues receiving on macOS."""
     headers = {"Authorization": auth} if auth else {}
+    ffmpeg_bin = shutil.which("ffmpeg") or ("ffmpeg.exe" if sys.platform == "win32" else "/opt/homebrew/bin/ffmpeg")
+    proc = None
+    udp_sock = None
+    stop_event = threading.Event()
     try:
         async with httpx.AsyncClient(verify=False, timeout=15.0) as client:
             # Clean up any existing webcam state
@@ -3116,43 +3393,78 @@ async def _capture_single_snapshot(serial: str, ip: str, auth: str, port: int, n
                     pass
             await asyncio.sleep(0.5)
 
+            # Bind our own UDP socket BEFORE telling the camera to stream
+            udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 512 * 1024)
+            udp_sock.settimeout(1.0)
+            udp_sock.bind(("0.0.0.0", port))
+
             # Start webcam on dedicated snapshot port
             resp = await client.get(
                 f"https://{ip}/gopro/webcam/start?port={port}", headers=headers
             )
             if resp.status_code != 200:
+                udp_sock.close()
                 return {"serial": serial, "name": name, "error": f"webcam/start HTTP {resp.status_code}"}
 
-            resp = await client.get(
-                f"https://{ip}/gopro/webcam/preview", headers=headers
-            )
-            if resp.status_code != 200:
-                await client.get(f"https://{ip}/gopro/webcam/stop", headers=headers)
-                return {"serial": serial, "name": name, "error": f"webcam/preview HTTP {resp.status_code}"}
-
-            # Wait for stream data to arrive
-            await asyncio.sleep(2.5)
-
-            # Use ffmpeg to grab one JPEG frame from the UDP stream
-            ffmpeg_bin = shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
+            # Start ffmpeg reading from stdin pipe
+            popen_kwargs = {}
+            if sys.platform == "win32":
+                popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
             proc = await asyncio.create_subprocess_exec(
                 ffmpeg_bin,
-                "-fflags", "nobuffer",
+                "-y",
+                "-fflags", "nobuffer+discardcorrupt+genpts",
+                "-analyzeduration", "10000000",
+                "-probesize", "5000000",
                 "-f", "mpegts",
-                "-i", f"udp://0.0.0.0:{port}?timeout=5000000",
+                "-i", "pipe:0",
                 "-frames:v", "1",
                 "-f", "image2",
                 "-vcodec", "mjpeg",
                 "-q:v", "2",
                 "pipe:1",
+                stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
+            logger.info(f"[COHN {serial}] ffmpeg+UDP proxy on port {port}")
+
+            # Start UDP→pipe thread
+            pipe_thread = threading.Thread(
+                target=_udp_to_pipe_thread,
+                args=(udp_sock, proc.stdin, stop_event),
+                daemon=True,
+            )
+            pipe_thread.start()
+
+            # Trigger the stream
+            resp = await client.get(
+                f"https://{ip}/gopro/webcam/preview", headers=headers
+            )
+            if resp.status_code != 200:
+                stop_event.set()
+                proc.kill()
+                udp_sock.close()
+                await client.get(f"https://{ip}/gopro/webcam/stop", headers=headers)
+                return {"serial": serial, "name": name, "error": f"webcam/preview HTTP {resp.status_code}"}
+
+            logger.info(f"[COHN {serial}] webcam/preview triggered, waiting for frame...")
+
+            # Wait for ffmpeg to capture one frame
             try:
-                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=12)
             except asyncio.TimeoutError:
                 proc.kill()
                 stdout = b""
+                stderr = b""
+                logger.warning(f"[COHN {serial}] ffmpeg timed out waiting for frame")
+
+            # Signal thread to stop and clean up
+            stop_event.set()
+            udp_sock.close()
+            udp_sock = None
 
             # Stop webcam
             for cleanup_path in ["/gopro/webcam/stop", "/gopro/webcam/exit"]:
@@ -3162,39 +3474,77 @@ async def _capture_single_snapshot(serial: str, ip: str, auth: str, port: int, n
                     pass
 
             if stdout and len(stdout) > 500:
-                import base64
+                logger.info(f"[COHN {serial}] Snapshot captured: {len(stdout)} bytes")
                 return {
                     "serial": serial,
                     "name": name,
                     "dataUrl": f"data:image/jpeg;base64,{base64.b64encode(stdout).decode()}",
                     "timestamp": datetime.now().strftime("%H:%M:%S"),
                 }
+            stderr_text = stderr.decode(errors='ignore')[-200:] if stderr else "no stderr"
+            logger.warning(f"[COHN {serial}] No frame captured. ffmpeg stderr: {stderr_text}")
             return {"serial": serial, "name": name, "error": "No frame captured"}
     except Exception as e:
         logger.error(f"[COHN {serial}] Snapshot error: {e}")
+        stop_event.set()
+        if proc and proc.returncode is None:
+            proc.kill()
         return {"serial": serial, "name": name, "error": str(e)}
+    finally:
+        if udp_sock:
+            try:
+                udp_sock.close()
+            except Exception:
+                pass
+
+
+async def _capture_single_snapshot(serial: str, ip: str, auth: str, port: int, name: str) -> dict:
+    """Wrapper with one retry: on error, cleanup webcam state, wait 2s, try again."""
+    result = await _capture_single_snapshot_inner(serial, ip, auth, port, name)
+    if "error" not in result:
+        return result
+
+    logger.info(f"[COHN {serial}] Snapshot failed ({result.get('error')}), retrying once...")
+    # Cleanup webcam state before retry
+    headers = {"Authorization": auth} if auth else {}
+    try:
+        async with httpx.AsyncClient(verify=False, timeout=5.0) as client:
+            for path in ["/gopro/webcam/stop", "/gopro/webcam/exit"]:
+                try:
+                    await client.get(f"https://{ip}{path}", headers=headers)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    await asyncio.sleep(2)
+    return await _capture_single_snapshot_inner(serial, ip, auth, port, name)
 
 
 @app.post("/api/cohn/snapshot/all")
 async def cohn_snapshot_all():
-    """Capture a single JPEG frame from each online COHN camera (no live preview needed)"""
+    """Capture a single JPEG frame from each online COHN camera (no live preview needed).
+    Uses check_all_cameras() which includes IP recovery via ARP when DHCP IPs change."""
     all_creds = cohn_manager.get_all_credentials()
     if not all_creds:
         raise HTTPException(status_code=400, detail="No COHN-provisioned cameras")
 
-    # Check which cameras are online
-    online = await cohn_manager.check_all_cameras()
+    # Use check_all_cameras() which includes ARP-based IP recovery
+    online_status = await cohn_manager.check_all_cameras()
 
     tasks = []
+    errors = {}
     for idx, (serial, creds) in enumerate(all_creds.items()):
-        if not online.get(serial, False):
+        if not online_status.get(serial, False):
+            errors[serial] = "Camera offline (unreachable after IP recovery attempt)"
             continue
+        # Re-read creds after check_all_cameras (IP may have been updated by recovery)
+        creds = cohn_manager.get_credentials(serial) or creds
         ip = creds.get("ip_address")
         if not ip:
+            errors[serial] = "No IP address"
             continue
         auth = cohn_manager.get_auth_header(serial)
-        cam_name = creds.get("name", serial)
-        # Look up camera name from camera_manager
+        cam_name = serial
         cam = camera_manager.get_camera(serial)
         if cam:
             cam_name = cam.name or cam_name
@@ -3202,17 +3552,19 @@ async def cohn_snapshot_all():
         tasks.append(_capture_single_snapshot(serial, ip, auth, port, cam_name))
 
     if not tasks:
-        return {"snapshots": {}, "error": "No online COHN cameras found"}
+        return {"snapshots": {}, "errors": errors, "error": "No online COHN cameras found"}
 
     results_list = await asyncio.gather(*tasks, return_exceptions=True)
     snapshots = {}
     for result in results_list:
         if isinstance(result, dict) and "serial" in result:
             snapshots[result["serial"]] = result
+            if "error" in result:
+                errors[result["serial"]] = result["error"]
         elif isinstance(result, Exception):
             logger.error(f"Snapshot task failed: {result}")
 
-    return {"snapshots": snapshots}
+    return {"snapshots": snapshots, "errors": errors}
 
 
 @app.post("/api/cohn/preview/start")

@@ -94,6 +94,38 @@
   border-bottom-color: var(--accent);
 }
 
+.tab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.4em;
+  padding: 0.1em 0.4em;
+  margin-left: 0.4em;
+  font-size: 0.75rem;
+  font-weight: 700;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--text-secondary);
+  vertical-align: middle;
+  line-height: 1;
+}
+
+.tab.active .tab-badge {
+  background: var(--accent);
+  color: #fff;
+}
+
+.tab-badge-rec {
+  background: var(--danger) !important;
+  color: #fff !important;
+  animation: pulse-badge 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse-badge {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
 .tab-content {
   flex: 1;
   padding: var(--space-2xl);

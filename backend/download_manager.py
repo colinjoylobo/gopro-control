@@ -783,9 +783,17 @@ class DownloadManager:
         progress_callback: Optional[Callable] = None,
         max_files: Optional[int] = None,
         shoot_name: Optional[str] = None,
-        take_number: Optional[int] = None
+        take_number: Optional[int] = None,
+        take_start: Optional[int] = None,
+        take_stop: Optional[int] = None,
+        take_windows: Optional[List[Dict]] = None
     ) -> List[Path]:
-        """Download files from camera via COHN HTTPS"""
+        """Download files from camera via COHN HTTPS.
+        If take_start/take_stop are provided (unix timestamps), only download files
+        whose mod_time falls within that window.
+        If take_windows is provided (list of {take_number, take_start, take_stop, shoot_name}),
+        fetch media list once and download files matching ANY window into per-take folders.
+        """
         downloaded_files = []
 
         try:
@@ -796,6 +804,62 @@ class DownloadManager:
             if not media_list:
                 logger.warning("No media files found on camera")
                 return []
+
+            # Multi-take mode: filter once, organize into per-take folders
+            if take_windows:
+                logger.info(f"Multi-take download: {len(take_windows)} take window(s)")
+                total_before = len(media_list)
+                matched_files = []  # list of (media, take_window)
+                for media in media_list:
+                    for tw in take_windows:
+                        if tw["take_start"] <= media["mod_time"] <= tw["take_stop"]:
+                            matched_files.append((media, tw))
+                            break  # Only match first window
+                logger.info(f"Multi-take filter: {total_before} total -> {len(matched_files)} matched")
+                if not matched_files:
+                    logger.warning("No files match any take time window")
+                    return []
+
+                total_files = len(matched_files)
+                for idx, (media, tw) in enumerate(matched_files, 1):
+                    filename = media["filename"]
+                    url = media["url"]
+                    safe_name = self._sanitize_filename(tw["shoot_name"])
+                    output_base = self.download_dir / safe_name / f"Take_{tw['take_number']:02d}" / f"GoPro{serial}"
+                    output_path = output_base / filename
+
+                    try:
+                        size_mb = int(media.get("size", 0)) / (1024 * 1024)
+                    except (ValueError, TypeError):
+                        size_mb = 0
+
+                    logger.info(f"[{idx}/{total_files}] Take {tw['take_number']}: {filename} ({size_mb:.1f} MB)")
+
+                    def file_progress(downloaded: int, total: int, _fn=filename, _idx=idx, _total=total_files):
+                        if progress_callback:
+                            percent = int((downloaded / total) * 100) if total > 0 else 0
+                            return progress_callback(_fn, _idx, _total, percent)
+
+                    success = await self.async_download_file(url, output_path, auth_header, file_progress)
+                    if success:
+                        downloaded_files.append(output_path)
+
+                logger.info(f"Multi-take download complete: {len(downloaded_files)}/{total_files} files")
+                return downloaded_files
+
+            # Single-take mode (existing behavior)
+            # Filter by take time window if provided
+            if take_start is not None and take_stop is not None:
+                before_count = len(media_list)
+                media_list = [
+                    f for f in media_list
+                    if f["mod_time"] >= take_start and f["mod_time"] <= take_stop
+                ]
+                logger.info(f"Take time filter: {before_count} total files -> {len(media_list)} files in window "
+                           f"({datetime.fromtimestamp(take_start).isoformat()} to {datetime.fromtimestamp(take_stop).isoformat()})")
+                if not media_list:
+                    logger.warning("No files match the take time window")
+                    return []
 
             if max_files and max_files > 0:
                 media_list = media_list[:max_files]

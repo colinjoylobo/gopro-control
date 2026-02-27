@@ -5,6 +5,8 @@ const os = require('os');
 const { spawn, execSync } = require('child_process');
 const http = require('http');
 
+const isWin = process.platform === 'win32';
+
 let mainWindow;
 let backendProcess = null;
 
@@ -19,10 +21,26 @@ function log(msg) {
 // Kill any existing process on port 8000
 function killExistingBackend() {
   try {
-    const pids = execSync('lsof -ti:8000 2>/dev/null', { encoding: 'utf-8' }).trim();
-    if (pids) {
-      log(`Killing existing processes on port 8000: ${pids}`);
-      execSync(`kill -9 ${pids.split('\n').join(' ')} 2>/dev/null`);
+    if (isWin) {
+      const output = execSync('netstat -ano | findstr :8000 | findstr LISTENING', { encoding: 'utf-8' }).trim();
+      if (output) {
+        const pids = new Set();
+        for (const line of output.split('\n')) {
+          const parts = line.trim().split(/\s+/);
+          const pid = parts[parts.length - 1];
+          if (pid && pid !== '0') pids.add(pid);
+        }
+        for (const pid of pids) {
+          log(`Killing PID ${pid} on port 8000`);
+          try { execSync(`taskkill /F /T /PID ${pid}`, { encoding: 'utf-8' }); } catch (e) {}
+        }
+      }
+    } else {
+      const pids = execSync('lsof -ti:8000 2>/dev/null', { encoding: 'utf-8' }).trim();
+      if (pids) {
+        log(`Killing existing processes on port 8000: ${pids}`);
+        execSync(`kill -9 ${pids.split('\n').join(' ')} 2>/dev/null`);
+      }
     }
   } catch (e) {
     // No process on port 8000, that's fine
@@ -32,13 +50,21 @@ function killExistingBackend() {
 // Find backend directory — tries multiple locations
 function findBackendDir() {
   const candidates = [];
+  const exeName = isWin ? 'gopro-backend.exe' : 'gopro-backend';
 
   if (app.isPackaged) {
     // Production: check Resources folder for bundled backend
     candidates.push(path.join(process.resourcesPath, 'backend', 'dist', 'gopro-backend'));
-    // Also check relative to .app bundle
+    // Also check relative to app bundle
     const exeDir = path.dirname(process.execPath);
-    candidates.push(path.resolve(exeDir, '..', '..', '..', '..', '..', '..', 'backend'));
+    if (isWin) {
+      // Windows: exe is in the install directory, backend is alongside
+      candidates.push(path.join(exeDir, 'resources', 'backend', 'dist', 'gopro-backend'));
+      candidates.push(path.resolve(exeDir, '..', 'backend'));
+    } else {
+      // macOS: relative to .app bundle
+      candidates.push(path.resolve(exeDir, '..', '..', '..', '..', '..', '..', 'backend'));
+    }
   } else {
     // Development: relative to electron/main.js
     candidates.push(path.join(__dirname, '..', '..', 'backend'));
@@ -62,7 +88,7 @@ function findBackendDir() {
 
   // Check for bundled executable
   for (const dir of candidates) {
-    const exe = path.join(dir, 'gopro-backend');
+    const exe = path.join(dir, exeName);
     if (fs.existsSync(exe)) {
       log(`Found bundled backend at: ${dir}`);
       return dir;
@@ -78,33 +104,36 @@ async function startBackend() {
   killExistingBackend();
 
   const backendDir = findBackendDir();
+  const exeName = isWin ? 'gopro-backend.exe' : 'gopro-backend';
   let backendExecutable;
   let backendArgs = [];
   let cwd = backendDir;
 
   // Check for bundled executable first
-  const bundledExe = path.join(backendDir, 'gopro-backend');
+  const bundledExe = path.join(backendDir, exeName);
   if (fs.existsSync(bundledExe)) {
     log('Using bundled backend executable');
     backendExecutable = bundledExe;
   } else {
     // Use venv Python
     log('Using Python venv backend');
-    const venvPython = process.platform === 'win32'
+    const venvPython = isWin
       ? path.join(backendDir, 'venv', 'Scripts', 'python.exe')
       : path.join(backendDir, 'venv', 'bin', 'python3');
 
     if (fs.existsSync(venvPython)) {
       backendExecutable = venvPython;
     } else {
-      // Try 'python' instead of 'python3' in venv
-      const venvPythonAlt = path.join(backendDir, 'venv', 'bin', 'python');
+      // Try alternate venv python name
+      const venvPythonAlt = isWin
+        ? path.join(backendDir, 'venv', 'Scripts', 'python3.exe')
+        : path.join(backendDir, 'venv', 'bin', 'python');
       if (fs.existsSync(venvPythonAlt)) {
         backendExecutable = venvPythonAlt;
       } else {
-        // Fallback to system python3
-        log('No venv found, falling back to system python3');
-        backendExecutable = 'python3';
+        // Fallback to system python
+        log('No venv found, falling back to system python');
+        backendExecutable = isWin ? 'python' : 'python3';
       }
     }
     backendArgs = ['main.py'];
@@ -147,13 +176,19 @@ async function startBackend() {
 function stopBackend() {
   if (backendProcess) {
     log('Stopping backend...');
-    backendProcess.kill('SIGTERM');
-    setTimeout(() => {
-      if (backendProcess) {
-        backendProcess.kill('SIGKILL');
-        backendProcess = null;
-      }
-    }, 3000);
+    if (isWin) {
+      // On Windows, SIGTERM is not reliable — use taskkill to kill process tree
+      try { execSync(`taskkill /F /T /PID ${backendProcess.pid}`); } catch (e) {}
+      backendProcess = null;
+    } else {
+      backendProcess.kill('SIGTERM');
+      setTimeout(() => {
+        if (backendProcess) {
+          backendProcess.kill('SIGKILL');
+          backendProcess = null;
+        }
+      }, 3000);
+    }
   }
   // Also kill anything lingering on port 8000
   killExistingBackend();
@@ -224,6 +259,7 @@ function createWindow() {
 app.whenReady().then(async () => {
   log('=== App starting ===');
   log(`isPackaged: ${app.isPackaged}`);
+  log(`platform: ${process.platform}`);
   log(`execPath: ${process.execPath}`);
   log(`__dirname: ${__dirname}`);
 

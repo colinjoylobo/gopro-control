@@ -655,17 +655,32 @@ function LivePreview({ cameras, apiUrl, cohnStatus, onCohnUpdate, subscribeWsMes
     if (needsBackend) {
       setMessage({ type: 'info', text: 'Capturing snapshots from cameras via COHN (may take a few seconds)...' });
       try {
-        const resp = await axios.post(`${apiUrl}/api/cohn/snapshot/all`);
+        const resp = await axios.post(`${apiUrl}/api/cohn/snapshot/all`, null, { timeout: 60000 });
         const backendSnaps = resp.data?.snapshots || {};
+        const backendErrors = resp.data?.errors || {};
         for (const [serial, snap] of Object.entries(backendSnaps)) {
           if (snap.dataUrl && !snaps[serial]) {
             snaps[serial] = snap;
           }
         }
+        // Show per-camera errors
+        const errorEntries = Object.entries(backendErrors).filter(([s]) => !snaps[s]);
+        if (errorEntries.length > 0) {
+          const errorText = errorEntries.map(([s, e]) => `${s}: ${e}`).join(', ');
+          setMessage({ type: 'warning', text: `Some cameras failed: ${errorText}` });
+          setTimeout(() => setMessage(null), 8000);
+        } else {
+          setMessage(null);
+        }
       } catch (err) {
         console.error('Backend snapshot failed:', err);
+        if (err.code === 'ECONNABORTED') {
+          setMessage({ type: 'error', text: 'Snapshot capture timed out (60s). Some cameras may be unreachable.' });
+        } else {
+          setMessage({ type: 'error', text: `Snapshot failed: ${err.response?.data?.detail || err.message}` });
+        }
+        setTimeout(() => setMessage(null), 8000);
       }
-      setMessage(null);
     }
 
     setSnapshots(snaps);

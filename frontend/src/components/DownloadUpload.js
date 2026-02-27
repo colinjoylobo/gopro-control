@@ -287,7 +287,7 @@ function DownloadUpload({ cameras, apiUrl, downloadWsMessage, activeShoot, cohnS
     }
 
     // Use selected take if no explicit shoot/take passed
-    if (!shootName && activeShoot) {
+    if (shootName === null && activeShoot) {
       const take = getSelectedTake();
       if (take && take.stopped_at) {
         shootName = activeShoot.name;
@@ -359,7 +359,7 @@ function DownloadUpload({ cameras, apiUrl, downloadWsMessage, activeShoot, cohnS
     }
   };
 
-  const handleDownloadFromAllCameras = async () => {
+  const handleDownloadFromAllCameras = async (overrideShootName = null, overrideTakeNumber = null) => {
     if (connectedCameras.length === 0) {
       setMessage({ type: 'error', text: 'No cameras connected! Connect cameras first.' });
       setTimeout(() => setMessage(null), 3000);
@@ -369,10 +369,13 @@ function DownloadUpload({ cameras, apiUrl, downloadWsMessage, activeShoot, cohnS
     setDownloading(true);
     const totalCameras = connectedCameras.length;
 
-    // Build common params
+    // Build common params — use overrides if provided (avoids stale React state)
     const dlParams = {};
     if (maxFiles) dlParams.max_files = parseInt(maxFiles);
-    if (activeShoot) {
+    if (overrideShootName && overrideTakeNumber !== null) {
+      dlParams.shoot_name = overrideShootName;
+      dlParams.take_number = overrideTakeNumber;
+    } else if (activeShoot) {
       const take = getSelectedTake();
       if (take && take.stopped_at) {
         dlParams.shoot_name = activeShoot.name;
@@ -1046,27 +1049,71 @@ function DownloadUpload({ cameras, apiUrl, downloadWsMessage, activeShoot, cohnS
         <div className="card take-download-section">
           <h2>Download by Take — {activeShoot.name}</h2>
           {activeShoot.takes && activeShoot.takes.filter(t => t.stopped_at).length > 0 ? (
-            <div className="take-download-list">
-              {activeShoot.takes.filter(t => t.stopped_at).reverse().map(take => (
-                <div key={take.take_number} className="take-download-item">
-                  <div className="take-download-info">
-                    <span className="take-download-number">Take {take.take_number}</span>
-                    {take.name && <span className="take-download-name">{take.name}</span>}
-                    <span className="take-download-cameras">{take.cameras?.length || 0} cameras</span>
+            <>
+              {/* Download ALL takes button */}
+              <div style={{ marginBottom: '1rem' }}>
+                <button
+                  className="btn btn-primary btn-download-all"
+                  onClick={async () => {
+                    setDownloading(true);
+                    const completedTakes = activeShoot.takes.filter(t => t.stopped_at);
+                    setMessage({ type: 'info', text: `Downloading all ${completedTakes.length} takes from "${activeShoot.name}"...` });
+                    // Set progress for all cameras
+                    const allCohn = Object.keys(cohnStatus || {});
+                    allCohn.forEach(serial => {
+                      setDownloadProgress(prev => ({ ...prev, [serial]: { filename: 'Initializing...', current: 0, total: 0, percent: 0 } }));
+                    });
+                    try {
+                      const response = await axios.post(`${apiUrl}/api/download/shoot/${activeShoot.id}`, null, { timeout: 600000 });
+                      setMessage({
+                        type: 'success',
+                        text: `Downloaded ${response.data.total_files} files across ${completedTakes.length} takes!`
+                      });
+                      // Clear progress for all cameras
+                      allCohn.forEach(serial => {
+                        setDownloadProgress(prev => { const n = {...prev}; delete n[serial]; return n; });
+                      });
+                      fetchDownloadedFiles();
+                    } catch (error) {
+                      setMessage({
+                        type: 'error',
+                        text: error.response?.data?.detail || `Bulk download failed: ${error.message}`
+                      });
+                      allCohn.forEach(serial => {
+                        setDownloadProgress(prev => { const n = {...prev}; delete n[serial]; return n; });
+                      });
+                    } finally {
+                      setDownloading(false);
+                      setTimeout(() => setMessage(null), 8000);
+                    }
+                  }}
+                  disabled={downloading}
+                >
+                  {downloading ? 'Downloading...' : `Download All ${activeShoot.takes.filter(t => t.stopped_at).length} Takes`}
+                </button>
+                <small style={{ display: 'block', marginTop: '0.25rem', color: 'var(--text-dimmed)' }}>
+                  Downloads all takes from all cameras in parallel. One media list fetch per camera.
+                </small>
+              </div>
+              <div className="take-download-list">
+                {activeShoot.takes.filter(t => t.stopped_at).reverse().map(take => (
+                  <div key={take.take_number} className="take-download-item">
+                    <div className="take-download-info">
+                      <span className="take-download-number">Take {take.take_number}</span>
+                      {take.name && <span className="take-download-name">{take.name}</span>}
+                      <span className="take-download-cameras">{take.cameras?.length || 0} cameras</span>
+                    </div>
+                    <button
+                      className="btn btn-primary btn-sm"
+                      onClick={() => handleDownloadFromAllCameras(activeShoot.name, take.take_number)}
+                      disabled={downloading}
+                    >
+                      Download Take {take.take_number}
+                    </button>
                   </div>
-                  <button
-                    className="btn btn-primary btn-sm"
-                    onClick={() => {
-                      setSelectedTakeIdx(String(activeShoot.takes.indexOf(take)));
-                      handleDownloadFromAllCameras();
-                    }}
-                    disabled={downloading}
-                  >
-                    Download Take {take.take_number}
-                  </button>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            </>
           ) : (
             <p style={{ color: 'var(--text-dimmed)', fontStyle: 'italic' }}>
               No completed takes yet. Record from the Dashboard tab to create takes.
