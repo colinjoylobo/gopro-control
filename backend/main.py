@@ -3100,6 +3100,121 @@ async def stream_cohn_ts(serial: str):
     )
 
 
+_SNAPSHOT_BASE_PORT = 9100  # Snapshot captures use ports 9100+ (separate from stream port 8554)
+
+
+async def _capture_single_snapshot(serial: str, ip: str, auth: str, port: int, name: str) -> dict:
+    """Capture a single JPEG frame from a COHN camera via webcam/UDP/ffmpeg"""
+    headers = {"Authorization": auth} if auth else {}
+    try:
+        async with httpx.AsyncClient(verify=False, timeout=15.0) as client:
+            # Clean up any existing webcam state
+            for cleanup_path in ["/gopro/webcam/stop", "/gopro/webcam/exit"]:
+                try:
+                    await client.get(f"https://{ip}{cleanup_path}", headers=headers)
+                except Exception:
+                    pass
+            await asyncio.sleep(0.5)
+
+            # Start webcam on dedicated snapshot port
+            resp = await client.get(
+                f"https://{ip}/gopro/webcam/start?port={port}", headers=headers
+            )
+            if resp.status_code != 200:
+                return {"serial": serial, "name": name, "error": f"webcam/start HTTP {resp.status_code}"}
+
+            resp = await client.get(
+                f"https://{ip}/gopro/webcam/preview", headers=headers
+            )
+            if resp.status_code != 200:
+                await client.get(f"https://{ip}/gopro/webcam/stop", headers=headers)
+                return {"serial": serial, "name": name, "error": f"webcam/preview HTTP {resp.status_code}"}
+
+            # Wait for stream data to arrive
+            await asyncio.sleep(2.5)
+
+            # Use ffmpeg to grab one JPEG frame from the UDP stream
+            ffmpeg_bin = shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
+            proc = await asyncio.create_subprocess_exec(
+                ffmpeg_bin,
+                "-fflags", "nobuffer",
+                "-f", "mpegts",
+                "-i", f"udp://0.0.0.0:{port}?timeout=5000000",
+                "-frames:v", "1",
+                "-f", "image2",
+                "-vcodec", "mjpeg",
+                "-q:v", "2",
+                "pipe:1",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            try:
+                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+            except asyncio.TimeoutError:
+                proc.kill()
+                stdout = b""
+
+            # Stop webcam
+            for cleanup_path in ["/gopro/webcam/stop", "/gopro/webcam/exit"]:
+                try:
+                    await client.get(f"https://{ip}{cleanup_path}", headers=headers)
+                except Exception:
+                    pass
+
+            if stdout and len(stdout) > 500:
+                import base64
+                return {
+                    "serial": serial,
+                    "name": name,
+                    "dataUrl": f"data:image/jpeg;base64,{base64.b64encode(stdout).decode()}",
+                    "timestamp": datetime.now().strftime("%H:%M:%S"),
+                }
+            return {"serial": serial, "name": name, "error": "No frame captured"}
+    except Exception as e:
+        logger.error(f"[COHN {serial}] Snapshot error: {e}")
+        return {"serial": serial, "name": name, "error": str(e)}
+
+
+@app.post("/api/cohn/snapshot/all")
+async def cohn_snapshot_all():
+    """Capture a single JPEG frame from each online COHN camera (no live preview needed)"""
+    all_creds = cohn_manager.get_all_credentials()
+    if not all_creds:
+        raise HTTPException(status_code=400, detail="No COHN-provisioned cameras")
+
+    # Check which cameras are online
+    online = await cohn_manager.check_all_cameras()
+
+    tasks = []
+    for idx, (serial, creds) in enumerate(all_creds.items()):
+        if not online.get(serial, False):
+            continue
+        ip = creds.get("ip_address")
+        if not ip:
+            continue
+        auth = cohn_manager.get_auth_header(serial)
+        cam_name = creds.get("name", serial)
+        # Look up camera name from camera_manager
+        cam = camera_manager.get_camera(serial)
+        if cam:
+            cam_name = cam.name or cam_name
+        port = _SNAPSHOT_BASE_PORT + idx
+        tasks.append(_capture_single_snapshot(serial, ip, auth, port, cam_name))
+
+    if not tasks:
+        return {"snapshots": {}, "error": "No online COHN cameras found"}
+
+    results_list = await asyncio.gather(*tasks, return_exceptions=True)
+    snapshots = {}
+    for result in results_list:
+        if isinstance(result, dict) and "serial" in result:
+            snapshots[result["serial"]] = result
+        elif isinstance(result, Exception):
+            logger.error(f"Snapshot task failed: {result}")
+
+    return {"snapshots": snapshots}
+
+
 @app.post("/api/cohn/preview/start")
 async def start_cohn_preview_all():
     """Start preview on all COHN-provisioned cameras"""

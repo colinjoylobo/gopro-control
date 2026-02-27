@@ -380,16 +380,25 @@ function RecordingDashboard({ cameras, onCamerasUpdate, apiUrl, activeShoot, onS
               {creatingShoot ? 'Creating...' : 'New Shoot'}
             </button>
             {shoots.length > 0 && (
-              <select
-                className="shoot-select"
-                onChange={(e) => e.target.value && handleSelectShoot(e.target.value)}
-                defaultValue=""
-              >
-                <option value="" disabled>Activate existing shoot...</option>
+              <div className="shoot-list-wrapper">
                 {shoots.map(s => (
-                  <option key={s.id} value={s.id}>{s.name} ({s.takes?.length || 0} takes)</option>
+                  <div key={s.id} className="shoot-list-item">
+                    <button
+                      className="btn btn-secondary btn-sm shoot-activate-btn"
+                      onClick={() => handleSelectShoot(s.id)}
+                    >
+                      {s.name} ({s.takes?.length || 0} takes)
+                    </button>
+                    <button
+                      className="btn btn-sm shoot-delete-btn"
+                      onClick={() => handleDeleteShoot(s.id, s.name)}
+                      title={`Delete "${s.name}"`}
+                    >
+                      &times;
+                    </button>
+                  </div>
                 ))}
-              </select>
+              </div>
             )}
           </div>
           <p className="shoot-hint">Create or select a shoot to organize recordings into takes.</p>

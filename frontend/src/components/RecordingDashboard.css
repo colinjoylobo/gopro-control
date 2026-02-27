@@ -240,19 +240,41 @@
   color: var(--text-dimmed);
 }
 
-.shoot-select {
-  padding: var(--space-sm) var(--space-md);
-  background: var(--bg-base);
-  border: 2px solid var(--border-default);
-  border-radius: var(--radius-lg);
-  color: var(--text-primary);
-  font-size: 0.85rem;
-  cursor: pointer;
+.shoot-list-wrapper {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  margin-top: var(--space-sm);
 }
 
-.shoot-select:focus {
-  border-color: var(--accent);
-  outline: none;
+.shoot-list-item {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.shoot-activate-btn {
+  border-top-right-radius: 0 !important;
+  border-bottom-right-radius: 0 !important;
+}
+
+.shoot-delete-btn {
+  background: var(--bg-surface) !important;
+  border: 1px solid var(--border-default) !important;
+  color: var(--text-muted) !important;
+  padding: 0.3rem 0.5rem !important;
+  font-size: 1rem !important;
+  line-height: 1;
+  border-top-left-radius: 0 !important;
+  border-bottom-left-radius: 0 !important;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.shoot-delete-btn:hover {
+  background: var(--danger) !important;
+  color: white !important;
+  border-color: var(--danger) !important;
 }
 
 /* ============== Layout Selector ============== */

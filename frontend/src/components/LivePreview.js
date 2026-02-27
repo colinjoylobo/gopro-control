@@ -619,13 +619,14 @@ function LivePreview({ cameras, apiUrl, cohnStatus, onCohnUpdate, subscribeWsMes
   const unprovisionedCount = cameras.length - provisionedCount;
   const streamingCount = Object.values(cohnCameras).filter(c => c.streaming).length;
 
-  // === Snapshot Capture ===
-  const captureAllSnapshots = useCallback(() => {
+  // === Snapshot Capture (hybrid: canvas for active streams + backend COHN for others) ===
+  const captureAllSnapshots = useCallback(async () => {
     setCapturingSnapshots(true);
     const snaps = {};
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
 
+    // 1) Capture from active video streams (instant, via canvas)
     cameras.forEach((camera) => {
       const videoEl = videoRefsMap.current[camera.serial];
       if (videoEl && videoEl.videoWidth > 0 && videoEl.videoHeight > 0) {
@@ -637,26 +638,46 @@ function LivePreview({ cameras, apiUrl, cohnStatus, onCohnUpdate, subscribeWsMes
             dataUrl: canvas.toDataURL('image/jpeg', 0.92),
             name: camera.name || `GoPro ${camera.serial}`,
             serial: camera.serial,
-            width: videoEl.videoWidth,
-            height: videoEl.videoHeight,
             timestamp: new Date().toLocaleTimeString(),
           };
         } catch (e) {
-          console.error(`Snapshot failed for ${camera.serial}:`, e);
+          console.error(`Canvas snapshot failed for ${camera.serial}:`, e);
         }
       }
     });
+
+    // 2) For COHN cameras without active streams, capture via backend
+    const needsBackend = cameras.some((cam) => {
+      const cohn = cohnStatus?.[cam.serial];
+      return cohn?.provisioned && !snaps[cam.serial];
+    });
+
+    if (needsBackend) {
+      setMessage({ type: 'info', text: 'Capturing snapshots from cameras via COHN (may take a few seconds)...' });
+      try {
+        const resp = await axios.post(`${apiUrl}/api/cohn/snapshot/all`);
+        const backendSnaps = resp.data?.snapshots || {};
+        for (const [serial, snap] of Object.entries(backendSnaps)) {
+          if (snap.dataUrl && !snaps[serial]) {
+            snaps[serial] = snap;
+          }
+        }
+      } catch (err) {
+        console.error('Backend snapshot failed:', err);
+      }
+      setMessage(null);
+    }
 
     setSnapshots(snaps);
     setShowSnapshots(true);
     setCapturingSnapshots(false);
 
     if (Object.keys(snaps).length === 0) {
-      setMessage({ type: 'error', text: 'No active streams to capture. Start previews first.' });
+      setMessage({ type: 'error', text: 'No COHN cameras online to capture snapshots from.' });
       setTimeout(() => setMessage(null), 5000);
       setShowSnapshots(false);
     }
-  }, [cameras]);
+  }, [cameras, cohnStatus, apiUrl]);
 
   const downloadSnapshotGrid = useCallback(() => {
     const snapsArr = Object.values(snapshots);
@@ -988,8 +1009,8 @@ function LivePreview({ cameras, apiUrl, cohnStatus, onCohnUpdate, subscribeWsMes
                 <button
                   className="btn btn-secondary btn-sm"
                   onClick={captureAllSnapshots}
-                  disabled={streamingCount === 0 || capturingSnapshots}
-                  title="Capture still frames from all streaming cameras"
+                  disabled={onlineCount === 0 || capturingSnapshots}
+                  title="Capture still frames from all online cameras (works without live preview)"
                 >
                   {capturingSnapshots ? 'Capturing...' : 'Snapshot Grid'}
                 </button>
