@@ -1,350 +1,319 @@
-# GoPro Control Center - Desktop Application
+# GoPro Control Center
 
-A cross-platform desktop application for controlling multiple GoPro cameras simultaneously. Built with Electron, React, and FastAPI.
+A cross-platform desktop application for controlling multiple GoPro cameras simultaneously over COHN (Camera on Home Network) and BLE. Built with Electron, React, and FastAPI.
 
 ## Features
 
-- **Multi-Camera Management**: Add, configure, and manage multiple GoPro cameras
-- **Auto-Discovery**: Automatically discover GoPro cameras via Bluetooth
-- **Synchronized Recording**: Start and stop recording on all cameras simultaneously
-- **Bulk Download**: Download all videos from cameras in descending order (newest first)
-- **S3 Upload**: Upload downloaded videos to S3 cloud storage
-- **Real-time Progress**: WebSocket-based progress tracking for downloads
-- **Cross-Platform**: Supports macOS, Windows, and Linux
+- **Multi-Camera Control** -- connect, configure, and record with multiple GoPros from one screen
+- **COHN (Camera on Home Network)** -- provision cameras onto your WiFi for always-on HTTP access without BLE range limits
+- **Synchronized Recording** -- start/stop recording on all cameras at once with shoot and take management
+- **Live Preview** -- real-time H.265 streams from each camera via COHN with sub-second latency
+- **Bulk Download** -- download files from all cameras in parallel over COHN (falls back to WiFi-direct)
+- **Preset Management** -- capture camera settings as presets and apply them across cameras via BLE or COHN
+- **S3 Upload** -- upload individual files or auto-zipped camera bundles to S3
+- **Health Dashboard** -- battery levels, storage, and connection status updated in real-time
+- **Cross-Platform** -- macOS, Windows, and Linux
 
-## Architecture
+## Quick Start
 
-### Backend (FastAPI + Python)
-- BLE connection management via `open-gopro`
-- Cross-platform WiFi management
-- Media download and upload handling
-- WebSocket for real-time updates
+### Prerequisites
 
-### Frontend (Electron + React)
-- Modern, responsive UI
-- Three main tabs:
-  - **Camera Management**: Connect/disconnect cameras, auto-discovery
-  - **Recording Control**: Start/stop synchronized recording
-  - **Download & Upload**: Download videos and upload to S3
+| Requirement | Version | Notes |
+|---|---|---|
+| Python | 3.8+ | Backend server |
+| Node.js | 16+ | Frontend build |
+| npm | (bundled with Node) | Package management |
+| ffmpeg | any | Live preview transcoding |
+| Bluetooth | -- | BLE camera discovery and pairing |
 
-## Prerequisites
+### One-Command Setup (builds and installs the app)
 
-### System Requirements
-- **Python 3.8+** (for backend)
-- **Node.js 16+** and npm (for frontend)
-- **Bluetooth** enabled on your computer
-
-### Platform-Specific Requirements
-
-#### macOS
-- No additional requirements
-
-#### Windows
-- WiFi management requires administrator privileges
-
-#### Linux
-- NetworkManager with `nmcli` installed
-- BlueZ for Bluetooth support
-- May require running with sudo for WiFi operations
-
-## Installation
-
-### 1. Clone or Navigate to the Project
-
+**macOS / Linux:**
 ```bash
-cd desktop-app
+git clone <repo-url> && cd gopro-control-v2
+chmod +x setup.sh
+./setup.sh
 ```
 
-### 2. Backend Setup
-
-```bash
-cd backend
-pip install -r requirements.txt
+**Windows (PowerShell as Administrator):**
+```powershell
+git clone <repo-url>; cd gopro-control-v2
+powershell -ExecutionPolicy Bypass -File setup.ps1
 ```
 
-**Note**: On macOS 15+ (Sequoia), you may need additional Bluetooth permissions. If you encounter issues, check System Settings > Privacy & Security > Bluetooth.
-
-### 3. Frontend Setup
-
-```bash
-cd frontend
-npm install
-```
-
-## Running the Application
+The setup script will:
+1. Detect your OS and install missing prerequisites (Python, Node, ffmpeg, git)
+2. Create a Python venv and install backend dependencies
+3. Bundle the backend with PyInstaller
+4. Build the React frontend
+5. Package the Electron app and install it
 
 ### Development Mode
 
-#### Option 1: Start Backend and Frontend Separately
+For active development, use the launcher scripts instead -- they start the backend and frontend without bundling.
 
-**Terminal 1 - Start Backend:**
+**macOS / Linux:**
 ```bash
-cd backend
-python3 -m uvicorn main:app --host 127.0.0.1 --port 8000 --reload
-```
-
-**Terminal 2 - Start Frontend:**
-```bash
-cd frontend
-npm run electron-dev
-```
-
-#### Option 2: Use the Provided Script (Recommended)
-
-```bash
-# From desktop-app root directory
 chmod +x start.sh
 ./start.sh
 ```
 
-The application will:
-1. Start the FastAPI backend on http://127.0.0.1:8000
-2. Launch the Electron app automatically
-3. Open DevTools in development mode
-
-### Production Build
-
-```bash
-cd frontend
-npm run build
-npm run package
+**Windows:**
+```bat
+start.bat
 ```
 
-This will create a distributable application in `frontend/dist/`.
+This starts:
+- FastAPI backend on `http://127.0.0.1:8000`
+- React dev server on `http://localhost:3000`
+- Electron window pointing at the dev server
 
-## Usage Guide
+## Architecture
 
-### 1. Camera Management Tab
-
-#### Adding Cameras Manually
-1. Click "Add Camera"
-2. Enter:
-   - Camera Serial (last 4 digits)
-   - Camera Name (optional, e.g., "Front Camera")
-   - WiFi SSID (e.g., "GP25468881")
-   - WiFi Password
-3. Click "Add Camera"
-
-#### Auto-Discovery
-1. Ensure Bluetooth is enabled
-2. Turn on your GoPro cameras
-3. Click "Auto-Discover"
-4. Wait 30 seconds for scanning
-5. Discovered cameras will be logged in console
-6. Add them manually with WiFi credentials
-
-#### Connecting Cameras
-1. Add all your cameras first
-2. Click "Connect All Cameras"
-3. Wait for BLE connections to establish
-4. Connected cameras will show "Connected" badge
-
-### 2. Recording Control Tab
-
-#### Starting Recording
-1. Ensure cameras are connected (green "Connected" status)
-2. Click "Start Recording"
-3. All cameras will begin recording simultaneously
-4. Timer will show recording duration
-
-#### Stopping Recording
-1. Click "Stop Recording"
-2. Wait a few seconds for files to save
-3. Recording timer will reset
-
-**Important**: Always wait at least 5-10 seconds after stopping before downloading to ensure files are saved.
-
-### 3. Download & Upload Tab
-
-#### Downloading Videos
-1. After recording, click "Enable WiFi on All Cameras"
-2. Wait 20 seconds for WiFi to activate
-3. For each camera, click "Download All Files"
-4. Progress will be shown in real-time
-5. Files are downloaded in descending order (newest first)
-6. Downloaded files are saved to `./gopro_downloads/`
-
-#### Uploading to S3
-1. Configure S3 settings at the top:
-   - Backend URL (your upload endpoint)
-   - API Key
-2. Find the file you want to upload in the list
-3. Click "Upload to S3" next to the file
-4. Wait for upload to complete
-
-## Configuration
-
-### Camera Configuration Format
-
-Cameras are stored with the following structure:
-```json
-{
-  "serial": "8881",
-  "name": "Front Camera",
-  "wifi_ssid": "GP25468881",
-  "wifi_password": "sW3-T!C-zMz"
-}
+```
+Electron (main process)
+  |
+  +-- React UI (renderer)          Tabs: Cameras | Recording | Preview | Downloads
+  |     |
+  |     +-- axios / WebSocket -----> FastAPI backend (port 8000)
+  |                                    |
+  |                                    +-- BLE (open-gopro) ----> GoPro cameras
+  |                                    +-- COHN (HTTPS) --------> GoPro cameras on WiFi
+  |                                    +-- WiFi-direct ----------> GoPro AP mode
+  |                                    +-- ffmpeg (UDP->HTTP) --> Live preview streams
 ```
 
-### S3 Upload Configuration
+**Backend** (`backend/`) -- FastAPI + Python
+- `main.py` -- all API routes, WebSocket hub, background health monitor
+- `camera_manager.py` -- BLE connection management via open-gopro
+- `cohn_manager.py` -- COHN provisioning, credential storage, IP recovery
+- `download_manager.py` -- file download (COHN/WiFi), S3 upload, ZIP packaging
+- `wifi_manager.py` -- cross-platform WiFi switching (macOS/Windows/Linux)
+- `shoot_manager.py` -- shoot and take tracking
+- `preset_manager.py` -- camera preset CRUD and application
 
-The app uses a backend API for S3 uploads. Configure:
-- **Backend URL**: Your upload endpoint
-- **API Key**: Authentication key for your backend
+**Frontend** (`frontend/`) -- Electron + React
+- `CameraManagement.js` -- add/discover/connect cameras, COHN provisioning
+- `RecordingDashboard.js` -- synchronized recording with shoot/take management
+- `LivePreview.js` -- real-time camera streams via mpegts.js
+- `DownloadUpload.js` -- browse/download/upload media, SD card management
+- `PresetManager.js` -- capture, edit, and apply camera presets
 
-Default configuration (can be changed in the UI):
-```javascript
-{
-  backend_url: "https://tinify-backend-dev-868570596092.asia-south1.run.app/api/upload-file",
-  api_key: "juniordevKey@9911"
-}
-```
+## COHN (Camera on Home Network)
+
+COHN lets GoPro cameras join your WiFi network so the app can communicate over HTTP instead of BLE/WiFi-direct. This enables:
+
+- **No range limits** -- cameras just need to be on the same network
+- **Parallel downloads** -- download from all cameras simultaneously
+- **Live preview** -- stream from multiple cameras at once
+- **Always-on settings** -- apply presets and check status without BLE pairing
+
+### Provisioning a Camera
+
+1. Go to the **Cameras** tab
+2. Connect the camera via BLE (click "Connect")
+3. Click **Provision COHN** on the camera card
+4. The camera will join your WiFi network and get an IP address
+5. Once provisioned, a green COHN badge appears -- the camera is now accessible over HTTP
+
+### Network Management
+
+- The app stores COHN credentials per-network so you can switch locations
+- If a camera's IP changes (DHCP), the app uses ARP to rediscover it
+- Manual IP override is available via the API if auto-discovery fails
 
 ## File Structure
 
 ```
-desktop-app/
-├── backend/
-│   ├── main.py                 # FastAPI server
-│   ├── camera_manager.py       # BLE camera control
-│   ├── wifi_manager.py         # Cross-platform WiFi
-│   ├── download_manager.py     # Download/upload logic
-│   └── requirements.txt        # Python dependencies
-├── frontend/
-│   ├── electron/
-│   │   ├── main.js            # Electron main process
-│   │   └── preload.js         # Preload script
-│   ├── src/
-│   │   ├── components/
-│   │   │   ├── CameraManagement.js
-│   │   │   ├── RecordingControl.js
-│   │   │   └── DownloadUpload.js
-│   │   ├── App.js             # Main React component
-│   │   └── index.js           # React entry point
-│   ├── public/
-│   │   └── index.html
-│   └── package.json
-├── gopro_downloads/           # Downloaded videos (created automatically)
-└── README.md
+gopro-control-v2/
++-- backend/
+|   +-- main.py                  # FastAPI server (all routes)
+|   +-- camera_manager.py        # BLE camera control
+|   +-- cohn_manager.py          # COHN provisioning and management
+|   +-- download_manager.py      # Download/upload/ZIP logic
+|   +-- wifi_manager.py          # Cross-platform WiFi
+|   +-- shoot_manager.py         # Shoot and take tracking
+|   +-- preset_manager.py        # Preset CRUD
+|   +-- gopro-backend.spec       # PyInstaller spec
+|   +-- requirements.txt         # Pinned Python dependencies
+|   +-- venv/                    # Python virtual environment (gitignored)
++-- frontend/
+|   +-- electron/
+|   |   +-- main.js              # Electron main process
+|   |   +-- preload.js           # Preload script
+|   +-- src/
+|   |   +-- App.js               # Main React component (tabs, WebSocket)
+|   |   +-- components/
+|   |   |   +-- CameraManagement.js
+|   |   |   +-- RecordingDashboard.js
+|   |   |   +-- LivePreview.js
+|   |   |   +-- DownloadUpload.js
+|   |   |   +-- PresetManager.js
+|   |   +-- App.css
+|   +-- public/
+|   +-- package.json
+|   +-- package-lock.json        # Locked dependency tree
++-- setup.sh                     # One-step setup (macOS/Linux)
++-- setup.ps1                    # One-step setup (Windows)
++-- build.sh                     # Build distributable (macOS/Linux)
++-- build.bat                    # Build distributable (Windows)
++-- start.sh                     # Dev launcher (macOS/Linux)
++-- start.bat                    # Dev launcher (Windows)
++-- saved_cameras.json           # Persisted camera list
++-- cohn_credentials.json        # COHN provisioning data
++-- camera_presets.json          # Saved presets
++-- shoots.json                  # Shoot/take history
++-- README.md
 ```
 
 ## API Endpoints
 
 ### Camera Management
-- `GET /api/cameras` - List all cameras
-- `POST /api/cameras` - Add camera
-- `DELETE /api/cameras/{serial}` - Remove camera
-- `POST /api/cameras/discover` - Auto-discover cameras
-- `POST /api/cameras/connect-all` - Connect all cameras
-- `POST /api/cameras/disconnect-all` - Disconnect all cameras
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/cameras` | List all cameras |
+| POST | `/api/cameras` | Add a camera |
+| DELETE | `/api/cameras/{serial}` | Remove a camera |
+| PATCH | `/api/cameras/{serial}` | Rename a camera |
+| POST | `/api/cameras/discover` | BLE auto-discover |
+| POST | `/api/cameras/connect-all` | Connect all via BLE |
+| POST | `/api/cameras/connect/{serial}` | Connect one via BLE |
+| POST | `/api/cameras/disconnect-all` | Disconnect all |
+| POST | `/api/cameras/disconnect/{serial}` | Disconnect one |
+| POST | `/api/cameras/check-connections` | Reconnect existing BLE |
+| GET | `/api/cameras/battery` | Battery levels |
 
-### Recording Control
-- `POST /api/recording/start` - Start recording
-- `POST /api/recording/stop` - Stop recording
+### Recording & Shoots
+| Method | Path | Description |
+|---|---|---|
+| POST | `/api/recording/start` | Start recording (all cameras) |
+| POST | `/api/recording/stop` | Stop recording |
+| POST | `/api/shoots` | Create a shoot |
+| GET | `/api/shoots` | List shoots |
+| GET | `/api/shoots/active` | Get active shoot |
+| POST | `/api/shoots/active` | Set active shoot |
+| POST | `/api/shoots/deactivate` | End current shoot |
+| DELETE | `/api/shoots/{id}` | Delete a shoot |
+| POST | `/api/shoots/{id}/takes` | Create a take |
+| PATCH | `/api/shoots/{id}/takes/{n}` | Update a take |
+| GET | `/api/shoots/{id}/takes/{n}/files` | Get take files |
+| DELETE | `/api/shoots/{id}/takes/{n}` | Delete a take |
 
-### WiFi & Download
-- `GET /api/wifi/current` - Get current WiFi
-- `POST /api/wifi/connect` - Connect to WiFi
-- `POST /api/wifi/enable-all` - Enable WiFi on cameras
-- `GET /api/media/list` - List media on camera
-- `POST /api/download/{serial}` - Download from camera
-- `GET /api/downloads/list` - List downloaded files
-- `POST /api/upload` - Upload to S3
+### Live Preview
+| Method | Path | Description |
+|---|---|---|
+| POST | `/api/preview/start` | Start preview (all cameras) |
+| POST | `/api/preview/start/{serial}` | Start preview (one) |
+| POST | `/api/preview/stop` | Stop preview (all) |
+| POST | `/api/preview/stop/{serial}` | Stop preview (one) |
+| POST | `/api/preview/stream-start` | Start UDP/HLS stream |
 
-### WebSocket
-- `ws://127.0.0.1:8000/ws` - Real-time updates
+### COHN
+| Method | Path | Description |
+|---|---|---|
+| POST | `/api/cohn/provision/{serial}` | Provision camera for COHN |
+| DELETE | `/api/cohn/provision/{serial}` | Remove COHN credentials |
+| GET | `/api/cohn/status` | COHN status (all cameras) |
+| GET | `/api/cohn/status/{serial}` | COHN status (one) |
+| POST | `/api/cohn/reenable` | Re-enable COHN (all) |
+| POST | `/api/cohn/reenable/{serial}` | Re-enable COHN (one) |
+| GET | `/api/cohn/networks` | List saved WiFi networks |
+| POST | `/api/cohn/networks/switch` | Switch WiFi network |
+| PATCH | `/api/cohn/camera/{serial}/ip` | Update stored IP |
+| GET | `/api/cohn/stream/{serial}` | MPEG-TS stream (chunked HTTP) |
+| POST | `/api/cohn/snapshot/all` | Capture JPEG from all cameras |
+| POST | `/api/cohn/preview/start` | Start COHN preview (all) |
+| POST | `/api/cohn/preview/stop` | Stop COHN preview (all) |
+| POST | `/api/cohn/settings/apply` | Apply settings via COHN |
+| POST | `/api/cohn/gps/enable` | Enable GPS via COHN |
+| GET | `/api/cohn/camera/state/{serial}` | Full camera state via COHN |
+
+### Downloads & Media
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/media/list` | List media on camera |
+| POST | `/api/browse/{serial}` | Browse SD card |
+| GET | `/api/cameras/{serial}/media-summary` | Media summary |
+| POST | `/api/download/{serial}` | Download all files |
+| POST | `/api/download/{serial}/latest` | Download latest video |
+| POST | `/api/download/{serial}/selected` | Download selected files |
+| POST | `/api/download/shoot/{id}` | Download all takes (parallel COHN) |
+| POST | `/api/cameras/{serial}/erase-sd` | Erase SD card |
+| GET | `/api/downloads/list` | List downloaded files |
+| POST | `/api/upload` | Upload file to S3 |
+| POST | `/api/create-zip` | ZIP and upload to S3 |
+| POST | `/api/upload-camera-bulk/{serial}` | ZIP all camera files and upload |
+
+### Presets
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/presets` | List presets |
+| POST | `/api/presets` | Create/update preset |
+| POST | `/api/presets/capture/{serial}` | Capture settings from camera |
+| POST | `/api/presets/{name}/apply` | Apply preset (BLE) |
+| POST | `/api/presets/{name}/apply-cohn` | Apply preset (COHN) |
+| DELETE | `/api/presets/{name}` | Delete preset |
+| PATCH | `/api/presets/{name}` | Toggle pinned |
+
+### Health & WebSocket
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/health` | Health check |
+| GET | `/api/health/dashboard` | Full health dashboard |
+| GET | `/api/health/{serial}` | Camera health detail |
+| POST | `/api/test-s3-backend` | Test S3 connectivity |
+| WS | `/ws` | Real-time updates |
+
+## Building for Distribution
+
+**macOS / Linux:**
+```bash
+./build.sh
+```
+
+**Windows:**
+```bat
+build.bat
+```
+
+This produces:
+- **macOS**: `frontend/dist/mac-arm64/GoPro Control.app` (or `.dmg`)
+- **Windows**: `frontend/dist/GoPro Control Setup 1.0.0.exe`
+- **Linux**: `frontend/dist/GoPro Control-1.0.0.AppImage`
+
+The build bundles Python via PyInstaller so end users don't need Python installed.
 
 ## Troubleshooting
 
-### Bluetooth Connection Issues
-- **macOS**: Check System Settings > Privacy & Security > Bluetooth
-- **Windows**: Ensure Bluetooth is enabled in Device Manager
-- **Linux**: Check BlueZ service is running: `sudo systemctl status bluetooth`
+### BLE / Bluetooth
+- **macOS**: System Settings > Privacy & Security > Bluetooth -- ensure your terminal/app has permission
+- **Windows**: Bluetooth must be enabled in Device Manager; run as Administrator if discovery fails
+- **Linux**: BlueZ must be running (`sudo systemctl start bluetooth`) and user must be in the `bluetooth` group
 
-### WiFi Connection Issues
-- **macOS**: May require Full Disk Access for Terminal/app
-- **Windows**: Run application as Administrator
-- **Linux**: May need sudo permissions for NetworkManager
+### WiFi
+- **macOS**: Terminal may need Full Disk Access for WiFi switching
+- **Windows**: WiFi management requires Administrator privileges
+- **Linux**: NetworkManager (`nmcli`) must be installed; may need sudo
 
-### Camera Not Discovered
-- Ensure camera is powered on
-- Check Bluetooth is enabled on computer
-- Try moving camera closer to computer
-- Restart camera and try again
+### COHN
+- Camera must be on firmware supporting COHN (Hero 12+)
+- Camera and computer must be on the same WiFi network
+- If COHN status shows "offline", try **Re-enable COHN** (re-provisions via BLE)
+- If IP changed after a router reboot, the app will attempt ARP recovery; if that fails, update the IP manually
 
-### Download Fails
-- Ensure WiFi is enabled on camera (wait 20 seconds after enabling)
-- Check you're not connected to another WiFi
-- Verify camera WiFi credentials are correct
-- Try connecting to camera WiFi manually first
+### Live Preview
+- Requires `ffmpeg` installed and on PATH
+- Preview uses UDP streaming -- firewalls must allow UDP traffic on the local network
+- If preview shows black, try stopping and restarting it
 
-### Upload Fails
-- Check backend URL is correct and accessible
-- Verify API key is valid
-- Ensure file size is within backend limits
-- Check internet connection
-
-## Advanced Configuration
-
-### Changing Default Ports
-
-Backend port (default: 8000):
-```python
-# backend/main.py
-uvicorn.run(app, host="127.0.0.1", port=8000)
-```
-
-Frontend will automatically connect to backend at `http://127.0.0.1:8000`
-
-### Custom Download Directory
-
-Downloads are saved to `./gopro_downloads/` by default. To change:
-
-```python
-# backend/download_manager.py
-download_manager = DownloadManager(download_dir=Path("/your/custom/path"))
-```
-
-## Development
-
-### Running Tests
-```bash
-# Backend tests (if available)
-cd backend
-pytest
-
-# Frontend tests
-cd frontend
-npm test
-```
-
-### Building for Production
-```bash
-cd frontend
-npm run build
-npm run package
-```
-
-This creates platform-specific executables in `frontend/dist/`.
-
-## Known Limitations
-
-1. **WiFi Switching**: The app temporarily disconnects your computer from current WiFi to connect to GoPro WiFi
-2. **Download Speed**: Limited by WiFi connection speed between computer and GoPro
-3. **BLE Range**: Cameras must be within Bluetooth range (typically 10-30 feet)
-4. **Simultaneous Downloads**: Downloads happen sequentially, not in parallel
-5. **Platform Permissions**: May require elevated permissions for WiFi/Bluetooth on some platforms
-
-## Contributing
-
-Feel free to submit issues and enhancement requests!
-
-## License
-
-This project is based on the OpenGoPro SDK and follows its licensing terms.
+### Downloads
+- COHN downloads work in parallel; WiFi-direct downloads are sequential (one camera at a time)
+- Wait 5-10 seconds after stopping recording before downloading so files finalize
+- If a download stalls, check camera WiFi/COHN status
 
 ## Credits
 
-- Built with [open-gopro](https://github.com/gopro/OpenGoPro) Python SDK
-- Uses [Electron](https://www.electronjs.org/) and [React](https://reactjs.org/)
-- Backend powered by [FastAPI](https://fastapi.tiangolo.com/)
+- [open-gopro](https://github.com/gopro/OpenGoPro) Python SDK
+- [Electron](https://www.electronjs.org/) + [React](https://reactjs.org/)
+- [FastAPI](https://fastapi.tiangolo.com/)
+- [mpegts.js](https://github.com/nicedayzhu/mpegts.js) for live preview decoding
